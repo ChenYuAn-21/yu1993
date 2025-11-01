@@ -122,8 +122,8 @@ def aggregate_monthly_cash():
     """).fetchall()
     result = []
     for r in rows:
-        inc = r["收入"] or 0.0
-        exp = r["支出"] or 0.0
+        inc = r["income"] or 0.0
+        exp = r["expense"] or 0.0
         result.append({
             "month": r["m"], "income": round(inc,2), "expense": round(exp,2),
             "balance": round(inc-exp,2)
