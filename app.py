@@ -1,127 +1,189 @@
-from flask import Flask, render_template, jsonify, request
+import os
+import sqlite3
+from flask import Flask, render_template, jsonify, request, g
 from datetime import datetime
 from collections import defaultdict
 
+DB_PATH = os.path.join(os.path.dirname(__file__), "finance.db")
+
 app = Flask(__name__)
 
-# =========================
-# 假資料（可改接資料庫）
-# =========================
+# -----------------------
+# SQLite 連線 & 初始化
+# -----------------------
+def get_db():
+    if "db" not in g:
+        g.db = sqlite3.connect(DB_PATH)
+        g.db.row_factory = sqlite3.Row
+    return g.db
 
-# 交易資料：income / expense
-TRANSACTIONS = [
-    # (date, type, amount, category, note)
-    ("2025-01-05", "income", 52000, "Salary", "January salary"),
-    ("2025-01-08", "expense", 4200, "食衣住行育樂", "Food & dining"),
-    ("2025-01-12", "expense", 399, "訂閱服務", "Netflix"),
-    ("2025-01-15", "expense", 3500, "其他", "Gifts"),
-    ("2025-01-28", "expense", 1500, "投資", "Stock fee"),
+@app.teardown_appcontext
+def close_db(_exc):
+    db = g.pop("db", None)
+    if db is not None:
+        db.close()
 
-    ("2025-02-05", "income", 52000, "Salary", "February salary"),
-    ("2025-02-09", "expense", 4800, "食衣住行育樂", "Food & dining"),
-    ("2025-02-12", "expense", 399, "訂閱服務", "Netflix"),
-    ("2025-02-19", "expense", 2100, "其他", "Shopping"),
-    ("2025-02-25", "expense", 1200, "投資", "ETF fee"),
+def init_db():
+    db = get_db()
+    db.executescript("""
+    CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,                 -- YYYY-MM-DD
+        type TEXT NOT NULL CHECK(type IN ('income','expense')),
+        amount REAL NOT NULL,
+        category TEXT NOT NULL,             -- 食物/交通/購物/娛樂/日用品/投資/其他
+        note TEXT
+    );
 
-    ("2025-03-05", "income", 52000, "Salary", "March salary"),
-    ("2025-03-07", "expense", 5000, "食衣住行育樂", "Food & dining"),
-    ("2025-03-12", "expense", 399, "訂閱服務", "Netflix"),
-    ("2025-03-20", "expense", 3500, "其他", "Clothes"),
-    ("2025-03-29", "expense", 1500, "投資", "Fund fee"),
-]
+    CREATE TABLE IF NOT EXISTS investment_positions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,                 -- 月底快照 YYYY-MM-DD
+        asset_class TEXT NOT NULL CHECK(asset_class IN ('stock','etf','bond','fund')),
+        market_value REAL NOT NULL,
+        net_inflow REAL NOT NULL DEFAULT 0
+    );
 
-# 投資持倉市值（月末快照 + 當月淨投入）
-INVESTMENT_POS = [
-    # (date(當月月底), asset_class, market_value, net_inflow)
-    ("2025-01-31", "stock", 120000, 5000),
-    ("2025-01-31", "etf",   80000,  0),
-    ("2025-01-31", "bond",  30000,  0),
-    ("2025-01-31", "fund",  20000,  2000),
+    CREATE TABLE IF NOT EXISTS trackers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        month TEXT NOT NULL,                -- YYYY-MM
+        name TEXT NOT NULL,
+        spent REAL NOT NULL DEFAULT 0,
+        budget REAL NOT NULL DEFAULT 0
+    );
+    """)
+    db.commit()
 
-    ("2025-02-28", "stock", 126000, 3000),
-    ("2025-02-28", "etf",   83000,  0),
-    ("2025-02-28", "bond",  30200,  0),
-    ("2025-02-28", "fund",  22300,  1000),
+    # 若無資料，建立示例資料
+    cur = db.execute("SELECT COUNT(1) AS c FROM transactions")
+    if cur.fetchone()["c"] == 0:
+        db.executemany(
+            "INSERT INTO transactions (date,type,amount,category,note) VALUES (?,?,?,?,?)",
+            [
+                ("2025-01-05","income",52000,"其他","January salary"),
+                ("2025-01-08","expense",4200,"食物","Food & dining"),
+                ("2025-01-12","expense",399,"訂閱服務","Netflix"),
+                ("2025-01-15","expense",3500,"其他","Gifts"),
+                ("2025-01-28","expense",1500,"投資","Stock fee"),
 
-    ("2025-03-31", "stock", 129000, 2000),
-    ("2025-03-31", "etf",   85000,  0),
-    ("2025-03-31", "bond",  30500,  0),
-    ("2025-03-31", "fund",  23500,  1000),
-]
+                ("2025-02-05","income",52000,"其他","February salary"),
+                ("2025-02-09","expense",4800,"食物","Food & dining"),
+                ("2025-02-12","expense",399,"訂閱服務","Netflix"),
+                ("2025-02-19","expense",2100,"購物","Shopping"),
+                ("2025-02-25","expense",1200,"投資","ETF fee"),
 
-# 追蹤項目（本月）
-TRACKERS = [
-    # (month, name, spent, budget)
-    ("2025-03", "食物花費", 5000, 6000),
-    ("2025-03", "購物金",  3500, 4000),
-]
+                ("2025-03-05","income",52000,"其他","March salary"),
+                ("2025-03-07","expense",5000,"食物","Food & dining"),
+                ("2025-03-12","expense",399,"訂閱服務","Netflix"),
+                ("2025-03-20","expense",3500,"購物","Clothes"),
+                ("2025-03-29","expense",1500,"投資","Fund fee"),
+            ]
+        )
+        db.executemany(
+            "INSERT INTO investment_positions (date,asset_class,market_value,net_inflow) VALUES (?,?,?,?)",
+            [
+                ("2025-01-31","stock",120000,5000),
+                ("2025-01-31","etf",  80000,0),
+                ("2025-01-31","bond", 30000,0),
+                ("2025-01-31","fund", 20000,2000),
 
+                ("2025-02-28","stock",126000,3000),
+                ("2025-02-28","etf",  83000,0),
+                ("2025-02-28","bond", 30200,0),
+                ("2025-02-28","fund", 22300,1000),
 
-# =========================
+                ("2025-03-31","stock",129000,2000),
+                ("2025-03-31","etf",  85000,0),
+                ("2025-03-31","bond", 30500,0),
+                ("2025-03-31","fund", 23500,1000),
+            ]
+        )
+        db.executemany(
+            "INSERT INTO trackers (month,name,spent,budget) VALUES (?,?,?,?)",
+            [
+                ("2025-03","食物花費",5000,6000),
+                ("2025-03","購物金",3500,4000),
+            ]
+        )
+        db.commit()
+
+with app.app_context():
+    init_db()
+
+# -----------------------
 # 工具：彙整與計算
-# =========================
+# -----------------------
 def ym(date_str):
-    dt = datetime.strptime(date_str, "%Y-%m-%d")
-    return dt.strftime("%Y-%m")
-
-def end_of_month(date_str):
-    return date_str  # 假設已是月底日期
+    return datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m")
 
 def aggregate_monthly_cash():
-    monthly = defaultdict(lambda: {"income": 0.0, "expense": 0.0})
-    for d, t, amt, cat, note in TRANSACTIONS:
-        m = ym(d)
-        monthly[m][t] += amt
-    # 加上結餘
+    db = get_db()
+    rows = db.execute("""
+        SELECT strftime('%Y-%m', date) AS m,
+               SUM(CASE WHEN type='income'  THEN amount ELSE 0 END) AS income,
+               SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) AS expense
+        FROM transactions
+        GROUP BY m
+        ORDER BY m
+    """).fetchall()
     result = []
-    for m in sorted(monthly.keys()):
-        inc = monthly[m]["income"]
-        exp = monthly[m]["expense"]
+    for r in rows:
+        inc = r["income"] or 0.0
+        exp = r["expense"] or 0.0
         result.append({
-            "month": m,
-            "income": round(inc, 2),
-            "expense": round(exp, 2),
-            "balance": round(inc - exp, 2)
+            "month": r["m"],
+            "income": round(inc,2),
+            "expense": round(exp,2),
+            "balance": round(inc-exp,2)
         })
     return result
 
 def aggregate_expense_by_category(target_month=None):
-    cate = defaultdict(float)
-    for d, t, amt, cat, note in TRANSACTIONS:
-        if t != "expense":
-            continue
-        if target_month and ym(d) != target_month:
-            continue
-        cate[cat] += amt
-    return [{"category": k, "amount": round(v, 2)} for k, v in cate.items()]
+    db = get_db()
+    if target_month:
+        rows = db.execute("""
+            SELECT category, SUM(amount) AS amt
+            FROM transactions
+            WHERE type='expense' AND strftime('%Y-%m',date)=?
+            GROUP BY category
+        """, (target_month,)).fetchall()
+    else:
+        rows = db.execute("""
+            SELECT category, SUM(amount) AS amt
+            FROM transactions
+            WHERE type='expense'
+            GROUP BY category
+        """).fetchall()
+    return [{"category": r["category"], "amount": round(r["amt"] or 0.0, 2)} for r in rows]
 
 def portfolio_by_month():
-    # 回傳每月總市值，以及分類分布
-    by_m = defaultdict(lambda: defaultdict(float))
-    for d, asset_class, mv, inflow in INVESTMENT_POS:
-        m = d[:7]
-        by_m[m][asset_class] += mv
-        by_m[m]["_total"] += mv
-        by_m[m]["_net_inflow"] += inflow
+    db = get_db()
+    rows = db.execute("""
+        SELECT strftime('%Y-%m', date) AS m, asset_class, SUM(market_value) AS mv, SUM(net_inflow) AS inflow
+        FROM investment_positions
+        GROUP BY m, asset_class
+        ORDER BY m
+    """).fetchall()
 
-    # 期初/期末供 ROI 用
+    by_m = defaultdict(lambda: defaultdict(float))
+    for r in rows:
+        by_m[r["m"]][r["asset_class"]] += r["mv"] or 0.0
+        by_m[r["m"]]["_total"] += r["mv"] or 0.0
+        by_m[r["m"]]["_net_inflow"] += r["inflow"] or 0.0
+
     months = sorted(by_m.keys())
     roi = {}
     for i, m in enumerate(months):
         mv_end = by_m[m]["_total"]
         inflow = by_m[m]["_net_inflow"]
         if i == 0:
-            roi[m] = None  # 第一個月沒有期初
+            roi[m] = None
         else:
             prev_m = months[i-1]
             mv_start = by_m[prev_m]["_total"]
-            # 簡化 ROI： (期末 - 期初 - 淨投入) / 期初
             roi[m] = round((mv_end - mv_start - inflow) / mv_start, 4) if mv_start > 0 else None
-
     return by_m, months, roi
 
 def total_assets_trend():
-    # 簡化：累積結餘（現金） + 投資市值
     monthly_cash = {x["month"]: x for x in aggregate_monthly_cash()}
     by_m, months, roi = portfolio_by_month()
 
@@ -132,21 +194,35 @@ def total_assets_trend():
         if m in monthly_cash:
             cash_acc += monthly_cash[m]["balance"]
         mv = by_m[m]["_total"]
-        trend.append({"month": m, "cash": round(cash_acc, 2), "investment": round(mv, 2), "total": round(cash_acc + mv, 2)})
+        trend.append({"month": m, "cash": round(cash_acc,2), "investment": round(mv,2), "total": round(cash_acc+mv,2)})
     return trend, roi
 
 def current_month():
-    # 以投資資料最新月為準
-    last = max([d[:7] for d, *_ in INVESTMENT_POS])
-    return last
+    db = get_db()
+    # 以投資或交易資料的最新月為準
+    m1 = db.execute("SELECT MAX(strftime('%Y-%m', date)) AS m FROM investment_positions").fetchone()["m"]
+    m2 = db.execute("SELECT MAX(strftime('%Y-%m', date)) AS m FROM transactions").fetchone()["m"]
+    candidates = [m for m in [m1, m2] if m]
+    return sorted(candidates)[-1] if candidates else datetime.today().strftime("%Y-%m")
 
-# =========================
+# -----------------------
 # Routes（頁面 & APIs）
-# =========================
-
+# -----------------------
 @app.route("/")
 def index():
     return render_template("index.html")
+
+@app.route("/api/months")
+def api_months():
+    db = get_db()
+    rows = db.execute("""
+        SELECT strftime('%Y-%m', date) AS m FROM transactions
+        UNION
+        SELECT strftime('%Y-%m', date) AS m FROM investment_positions
+        ORDER BY m
+    """).fetchall()
+    months = [r["m"] for r in rows]
+    return jsonify(months)
 
 @app.route("/api/line_income_expense_balance")
 def api_line():
@@ -154,12 +230,9 @@ def api_line():
 
 @app.route("/api/pie_expense_by_category")
 def api_pie():
-    m = request.args.get("month")  # 可指定月份
+    m = request.args.get("month")
     data = aggregate_expense_by_category(m)
-    return jsonify({
-        "month": m or "ALL",
-        "data": data
-    })
+    return jsonify({"month": m or "ALL", "data": data})
 
 @app.route("/api/bar_portfolio_allocation")
 def api_bar():
@@ -168,7 +241,7 @@ def api_bar():
         return jsonify({"month": None, "data": []})
     target = request.args.get("month") or months[-1]
     comp = by_m[target]
-    data = [{"asset_class": k, "market_value": v} for k, v in comp.items() if not k.startswith("_")]
+    data = [{"asset_class": k, "market_value": comp[k]} for k in ("stock","etf","bond","fund") if comp.get(k,0)>0]
     return jsonify({"month": target, "data": data})
 
 @app.route("/api/kpis")
@@ -176,17 +249,17 @@ def api_kpis():
     monthly = aggregate_monthly_cash()
     trend, roi_map = total_assets_trend()
     last_m = trend[-1]["month"] if trend else None
-    # 當月 KPI
     m = request.args.get("month") or (last_m if last_m else current_month())
-    # 當月收入/支出/現金流/儲蓄率
+
     inc = exp = bal = 0.0
     for x in monthly:
         if x["month"] == m:
             inc, exp, bal = x["income"], x["expense"], x["balance"]
             break
     savings_rate = round((bal / inc), 4) if inc > 0 else None
-    monthly_roi = roi_map.get(m)  # 可能為 None（首月）
+    monthly_roi = roi_map.get(m)  # 只來自 investment_positions，與一般消費無關
     assets_total = next((t["total"] for t in trend if t["month"] == m), None)
+
     return jsonify({
         "month": m,
         "income": inc,
@@ -199,12 +272,48 @@ def api_kpis():
 
 @app.route("/api/trackers")
 def api_trackers():
-    # 可用 query 參數指定月份
+    db = get_db()
     m = request.args.get("month") or current_month()
-    rows = [t for t in TRACKERS if t[0] == m]
-    data = [{"month": r[0], "name": r[1], "spent": r[2], "budget": r[3],
-             "progress": round(r[2]/r[3], 4) if r[3] else None} for r in rows]
+    rows = db.execute("SELECT month,name,spent,budget FROM trackers WHERE month=?", (m,)).fetchall()
+    data = [{"month": r["month"], "name": r["name"], "spent": r["spent"], "budget": r["budget"],
+             "progress": round(r["spent"]/r["budget"], 4) if r["budget"] else None} for r in rows]
     return jsonify({"month": m, "data": data})
+
+# ---- 新增交易（收入/支出）----
+@app.route("/api/transactions", methods=["POST"])
+def api_add_transaction():
+    payload = request.get_json(force=True)
+    # 欄位：type, date, category, note, amount
+    ttype = payload.get("type")
+    date = payload.get("date")
+    category = payload.get("category")
+    note = payload.get("note", "")
+    amount = payload.get("amount")
+
+    # 基本驗證
+    if ttype not in ("income","expense"):
+        return jsonify({"ok": False, "error": "type must be income or expense"}), 400
+    try:
+        datetime.strptime(date, "%Y-%m-%d")
+    except Exception:
+        return jsonify({"ok": False, "error": "date must be YYYY-MM-DD"}), 400
+    if category not in ("食物","交通","購物","娛樂","日用品","投資","其他","訂閱服務"):
+        return jsonify({"ok": False, "error": "category invalid"}), 400
+    try:
+        amount = float(amount)
+        if amount <= 0:
+            raise ValueError()
+    except Exception:
+        return jsonify({"ok": False, "error": "amount must be positive"}), 400
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO transactions (date,type,amount,category,note) VALUES (?,?,?,?,?)",
+        (date, ttype, amount, category, note)
+    )
+    db.commit()
+    return jsonify({"ok": True})
 
 if __name__ == "__main__":
     app.run(debug=True)
+
