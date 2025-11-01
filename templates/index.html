@@ -3,20 +3,20 @@
 
 <!-- KPI -->
 <section class="grid kpi-grid">
-  <div class="card">
-    <div class="kpi-title">儲蓄率</div>
+  <div class="card kpi-card">
+    <div class="kpi-title">🧸 儲蓄率</div>
     <div class="kpi-value" id="kpiSavingsRate">--</div>
   </div>
-  <div class="card">
-    <div class="kpi-title">投資報酬率（當月，投資部位）</div>
+  <div class="card kpi-card">
+    <div class="kpi-title">📈 投資報酬率（當月）</div>
     <div class="kpi-value" id="kpiROI">--</div>
   </div>
-  <div class="card">
-    <div class="kpi-title">月現金流</div>
+  <div class="card kpi-card">
+    <div class="kpi-title">💁 月現金流</div>
     <div class="kpi-value" id="kpiCashFlow">--</div>
   </div>
-  <div class="card">
-    <div class="kpi-title">資產總額</div>
+  <div class="card kpi-card">
+    <div class="kpi-title">🌼 資產總額</div>
     <div class="kpi-value" id="kpiAssets">--</div>
   </div>
 </section>
@@ -24,22 +24,22 @@
 <!-- 圖表 -->
 <section class="grid charts-grid">
   <div class="card">
-    <h3>收入 / 支出 / 結餘（月度）</h3>
+    <h3>📅 收入 / 支出 / 結餘（月度）</h3>
     <canvas id="lineMonthly"></canvas>
   </div>
   <div class="card">
-    <h3>支出分類（圓餅圖）</h3>
+    <h3>🍰 支出分類（圓餅圖）</h3>
     <canvas id="pieExpense"></canvas>
   </div>
   <div class="card">
-    <h3>投資組合分配（長條圖）</h3>
-    <canvas id="barPortfolio"></canvas>
+    <h3>🧭 消費雷達圖（本月）</h3>
+    <canvas id="radarExpense"></canvas>
   </div>
 </section>
 
 <!-- 追蹤 -->
 <section class="card">
-  <h3>財務追蹤</h3>
+  <h3>📌 財務追蹤</h3>
   <table class="table">
     <thead>
       <tr>
@@ -50,17 +50,33 @@
   </table>
 </section>
 
-<!-- 浮動新增交易按鈕 -->
-<button id="addTxnBtn" class="fab">＋ 新增交易</button>
+<!-- 交易清單 -->
+<section class="card">
+  <div class="flex-between">
+    <h3>🗒️ 交易清單</h3>
+    <button id="addTxnBtn" class="btn primary">＋ 新增交易</button>
+  </div>
+  <div class="table-scroll">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID</th><th>日期</th><th>類型</th><th>類別</th><th>金額</th><th>明細</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="txnBody"></tbody>
+    </table>
+  </div>
+</section>
 
-<!-- 新增交易 Modal -->
+<!-- 新增/編輯 交易 Modal -->
 <div id="txnModal" class="modal hidden">
   <div class="modal-content">
     <div class="modal-header">
-      <h3>新增交易</h3>
+      <h3 id="modalTitle">新增交易</h3>
       <button id="modalClose" class="icon-btn" aria-label="close">✕</button>
     </div>
     <form id="txnForm" class="form">
+      <input type="hidden" name="id" />
       <div class="row">
         <label>收支類型</label>
         <select name="type" required>
@@ -95,7 +111,7 @@
       </div>
       <div class="modal-actions">
         <button type="button" id="cancelBtn" class="btn ghost">取消</button>
-        <button type="submit" class="btn primary">新增</button>
+        <button type="submit" class="btn primary">儲存</button>
       </div>
     </form>
   </div>
@@ -106,12 +122,13 @@
 {% block scripts %}
 <script>
   const monthSelect = document.getElementById('monthSelect');
-  let lineChart, pieChart, barChart;
+  let lineChart, pieChart, radarChart;
+  const palette = {
+    radarBg: 'rgba(99, 102, 241, 0.2)',
+    radarBorder: 'rgba(99, 102, 241, 1)',
+  };
 
-  async function fetchJSON(url, opts){
-    const res = await fetch(url, opts);
-    return res.json();
-  }
+  async function fetchJSON(url, opts){ const r = await fetch(url, opts); return r.json(); }
 
   // 初始化月份
   async function initMonths() {
@@ -128,46 +145,46 @@
       updateKPIs(m),
       updateLine(),
       updatePie(m),
-      updateBar(m),
+      updateRadar(m),
       updateTrackers(m),
+      updateTxnTable(m),
     ]);
   }
 
+  // KPI
   async function updateKPIs(month){
     const data = await fetchJSON(`/api/kpis?month=${month}`);
     document.getElementById('kpiSavingsRate').textContent =
-      (data.savings_rate != null) ? (data.savings_rate*100).toFixed(1)+'%' : '--';
+      (data.savings_rate!=null)?(data.savings_rate*100).toFixed(1)+'%':'--';
     document.getElementById('kpiROI').textContent =
-      (data.monthly_roi != null) ? (data.monthly_roi*100).toFixed(2)+'%' : '—';
+      (data.monthly_roi!=null)?(data.monthly_roi*100).toFixed(2)+'%':'—';
     document.getElementById('kpiCashFlow').textContent =
-      (data.cash_flow != null) ? data.cash_flow.toLocaleString() : '--';
+      (data.cash_flow!=null)?data.cash_flow.toLocaleString():'--';
     document.getElementById('kpiAssets').textContent =
-      (data.assets_total != null) ? data.assets_total.toLocaleString() : '--';
+      (data.assets_total!=null)?data.assets_total.toLocaleString():'--';
   }
 
+  // 月度折線
   async function updateLine(){
     const rows = await fetchJSON('/api/line_income_expense_balance');
     const labels = rows.map(r => r.month);
     const income = rows.map(r => r.income);
     const expense = rows.map(r => r.expense);
     const balance = rows.map(r => r.balance);
-
     const ctx = document.getElementById('lineMonthly').getContext('2d');
     if(lineChart) lineChart.destroy();
     lineChart = new Chart(ctx, {
       type: 'line',
-      data: {
-        labels,
-        datasets: [
-          { label: '收入', data: income },
-          { label: '支出', data: expense },
-          { label: '結餘', data: balance },
-        ]
-      },
-      options: { responsive: true, maintainAspectRatio: false }
+      data: { labels, datasets: [
+        { label: '收入', data: income },
+        { label: '支出', data: expense },
+        { label: '結餘', data: balance },
+      ]},
+      options: { responsive:true, maintainAspectRatio:false }
     });
   }
 
+  // 支出圓餅
   async function updatePie(month){
     const res = await fetchJSON(`/api/pie_expense_by_category?month=${month}`);
     const labels = res.data.map(x => x.category);
@@ -177,23 +194,41 @@
     pieChart = new Chart(ctx, {
       type: 'pie',
       data: { labels, datasets: [{ data: amounts }] },
-      options: { responsive: true, maintainAspectRatio: false }
+      options: { responsive:true, maintainAspectRatio:false }
     });
   }
 
-  async function updateBar(month){
-    const res = await fetchJSON(`/api/bar_portfolio_allocation?month=${month}`);
-    const labels = res.data.map(x => x.asset_class.toUpperCase());
-    const values = res.data.map(x => x.market_value);
-    const ctx = document.getElementById('barPortfolio').getContext('2d');
-    if(barChart) barChart.destroy();
-    barChart = new Chart(ctx, {
-      type: 'bar',
-      data: { labels, datasets: [{ label: `${res.month} 市值`, data: values }] },
-      options: { responsive: true, maintainAspectRatio: false }
+  // 消費雷達圖（取用同一個 API）
+  async function updateRadar(month){
+    const res = await fetchJSON(`/api/pie_expense_by_category?month=${month}`);
+    const labels = res.data.map(x => x.category);
+    const amounts = res.data.map(x => x.amount);
+    const ctx = document.getElementById('radarExpense').getContext('2d');
+    if(radarChart) radarChart.destroy();
+    radarChart = new Chart(ctx, {
+      type: 'radar',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: `${month} 支出`,
+            data: amounts,
+            backgroundColor: palette.radarBg,
+            borderColor: palette.radarBorder,
+            pointBackgroundColor: palette.radarBorder
+          }
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false,
+        scales: {
+          r: { beginAtZero: true, ticks: { display: true } }
+        }
+      }
     });
   }
 
+  // 追蹤表
   async function updateTrackers(month){
     const res = await fetchJSON(`/api/trackers?month=${month}`);
     const rows = res.data.map(r => {
@@ -208,21 +243,76 @@
     document.getElementById('trackerBody').innerHTML = rows || `<tr><td colspan="4">本月無資料</td></tr>`;
   }
 
-  // -------- 新增交易 Modal --------
+  // ----------------- 交易清單 & CRUD -----------------
   const addBtn = document.getElementById('addTxnBtn');
   const modal = document.getElementById('txnModal');
   const modalClose = document.getElementById('modalClose');
   const cancelBtn = document.getElementById('cancelBtn');
   const form = document.getElementById('txnForm');
+  const modalTitle = document.getElementById('modalTitle');
+  const txnBody = document.getElementById('txnBody');
 
   function openModal(){ modal.classList.remove('hidden'); }
-  function closeModal(){ modal.classList.add('hidden'); form.reset(); }
+  function closeModal(){ modal.classList.add('hidden'); form.reset(); form.elements.id.value=''; }
 
-  addBtn.addEventListener('click', openModal);
+  addBtn.addEventListener('click', ()=>{ modalTitle.textContent='新增交易'; openModal(); });
   modalClose.addEventListener('click', closeModal);
   cancelBtn.addEventListener('click', closeModal);
   window.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeModal(); });
   window.addEventListener('click', (e)=>{ if(e.target===modal) closeModal(); });
+
+  async function updateTxnTable(month){
+    const res = await fetchJSON(`/api/transactions?month=${month}`);
+    const rows = res.data.map(r => {
+      const typeEmoji = r.type==='income' ? '🟢' : '🔴';
+      return `<tr>
+        <td>${r.id}</td>
+        <td>${r.date}</td>
+        <td>${typeEmoji} ${r.type}</td>
+        <td>${r.category}</td>
+        <td>${Number(r.amount).toLocaleString()}</td>
+        <td>${r.note ? r.note.replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''}</td>
+        <td class="actions">
+          <button class="btn tiny" data-edit="${r.id}">編輯</button>
+          <button class="btn tiny danger" data-del="${r.id}">刪除</button>
+        </td>
+      </tr>`;
+    }).join('');
+    txnBody.innerHTML = rows || `<tr><td colspan="7">尚無交易</td></tr>`;
+
+    // 綁定按鈕
+    txnBody.querySelectorAll('[data-edit]').forEach(btn=>{
+      btn.addEventListener('click', ()=> startEdit(btn.getAttribute('data-edit')));
+    });
+    txnBody.querySelectorAll('[data-del]').forEach(btn=>{
+      btn.addEventListener('click', ()=> delTxn(btn.getAttribute('data-del')));
+    });
+  }
+
+  async function startEdit(id){
+    // 從表格讀資料就好，也可呼叫單筆 API（此處簡化）
+    const tr = [...txnBody.querySelectorAll('tr')].find(row => row.children[0]?.textContent == id);
+    if(!tr) return;
+    const [_, date, typeCell, category, amount, note] = tr.children;
+    form.elements.id.value = id;
+    form.elements.date.value = date.textContent;
+    form.elements.type.value = typeCell.textContent.includes('income') ? 'income' : 'expense';
+    form.elements.category.value = category.textContent;
+    form.elements.amount.value = amount.textContent.replace(/,/g,'');
+    form.elements.note.value = note.textContent;
+    modalTitle.textContent = '編輯交易';
+    openModal();
+  }
+
+  async function delTxn(id){
+    if(!confirm('確定要刪除這筆交易嗎？')) return;
+    const res = await fetchJSON(`/api/transactions/${id}`, { method:'DELETE' });
+    if(res.ok){
+      await initMonths();
+    }else{
+      alert('刪除失敗');
+    }
+  }
 
   form.addEventListener('submit', async (e)=>{
     e.preventDefault();
@@ -234,17 +324,26 @@
       note: fd.get('note') || '',
       amount: fd.get('amount')
     };
-    const res = await fetchJSON('/api/transactions', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
+    const id = fd.get('id');
+    let res;
+    if(id){ // 編輯
+      res = await fetchJSON(`/api/transactions/${id}`, {
+        method: 'PUT',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+    }else{  // 新增
+      res = await fetchJSON('/api/transactions', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+    }
     if(res.ok){
       closeModal();
-      // 更新月份下拉（避免新月份沒出現在圖上）
-      await initMonths();
+      await initMonths(); // 重新讀月份+所有圖表（確保新月份可切換）
     }else{
-      alert(res.error || '新增失敗');
+      alert(res.error || '儲存失敗');
     }
   });
 
@@ -252,4 +351,5 @@
   initMonths();
 </script>
 {% endblock %}
+
 
