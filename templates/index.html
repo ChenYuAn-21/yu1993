@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block content %}
+
+<!-- KPI Cards -->
+<section class="grid kpi-grid">
+  <div class="card">
+    <div class="kpi-title">儲蓄率</div>
+    <div class="kpi-value" id="kpiSavingsRate">--</div>
+  </div>
+  <div class="card">
+    <div class="kpi-title">投資報酬率（當月）</div>
+    <div class="kpi-value" id="kpiROI">--</div>
+  </div>
+  <div class="card">
+    <div class="kpi-title">月現金流</div>
+    <div class="kpi-value" id="kpiCashFlow">--</div>
+  </div>
+  <div class="card">
+    <div class="kpi-title">資產總額</div>
+    <div class="kpi-value" id="kpiAssets">--</div>
+  </div>
+</section>
+
+<!-- Charts -->
+<section class="grid charts-grid">
+  <div class="card">
+    <h3>收入 / 支出 / 結餘（月度）</h3>
+    <canvas id="lineMonthly"></canvas>
+  </div>
+
+  <div class="card">
+    <h3>支出分類（圓餅圖）</h3>
+    <canvas id="pieExpense"></canvas>
+  </div>
+
+  <div class="card">
+    <h3>投資組合分配（長條圖）</h3>
+    <canvas id="barPortfolio"></canvas>
+  </div>
+</section>
+
+<!-- Trackers -->
+<section class="card">
+  <h3>財務追蹤</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>項目</th><th>本月花費</th><th>預算</th><th>達成率</th>
+      </tr>
+    </thead>
+    <tbody id="trackerBody"></tbody>
+  </table>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const monthSelect = document.getElementById('monthSelect');
+  let lineChart, pieChart, barChart;
+
+  async function fetchJSON(url){
+    const res = await fetch(url);
+    return res.json();
+  }
+
+  // 初始化月份下拉
+  async function initMonths() {
+    const line = await fetchJSON('/api/line_income_expense_balance');
+    const months = line.map(x => x.month);
+    monthSelect.innerHTML = months.map((m, idx) => 
+      `<option value="${m}" ${idx === months.length-1 ? 'selected':''}>${m}</option>`
+    ).join('');
+    updateAll();
+  }
+
+  // 更新所有區塊
+  async function updateAll(){
+    const m = monthSelect.value;
+    updateKPIs(m);
+    updateLine();     // 全期間的折線
+    updatePie(m);     // 指定月的分布
+    updateBar(m);     // 指定月的投資組合
+    updateTrackers(m);
+  }
+
+  // KPI
+  async function updateKPIs(month){
+    const data = await fetchJSON(`/api/kpis?month=${month}`);
+    document.getElementById('kpiSavingsRate').textContent =
+      (data.savings_rate != null) ? (data.savings_rate*100).toFixed(1)+'%' : '--';
+    document.getElementById('kpiROI').textContent =
+      (data.monthly_roi != null) ? (data.monthly_roi*100).toFixed(2)+'%' : '—';
+    document.getElementById('kpiCashFlow').textContent =
+      (data.cash_flow != null) ? data.cash_flow.toLocaleString() : '--';
+    document.getElementById('kpiAssets').textContent =
+      (data.assets_total != null) ? data.assets_total.toLocaleString() : '--';
+  }
+
+  // 折線圖：收入/支出/結餘
+  async function updateLine(){
+    const rows = await fetchJSON('/api/line_income_expense_balance');
+    const labels = rows.map(r => r.month);
+    const income = rows.map(r => r.income);
+    const expense = rows.map(r => r.expense);
+    const balance = rows.map(r => r.balance);
+
+    const ctx = document.getElementById('lineMonthly').getContext('2d');
+    if(lineChart) lineChart.destroy();
+    lineChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [
+          { label: '收入', data: income },
+          { label: '支出', data: expense },
+          { label: '結餘', data: balance },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false
+      }
+    });
+  }
+
+  // 圓餅圖：支出分類
+  async function updatePie(month){
+    const res = await fetchJSON(`/api/pie_expense_by_category?month=${month}`);
+    const labels = res.data.map(x => x.category);
+    const amounts = res.data.map(x => x.amount);
+
+    const ctx = document.getElementById('pieExpense').getContext('2d');
+    if(pieChart) pieChart.destroy();
+    pieChart = new Chart(ctx, {
+      type: 'pie',
+      data: {
+        labels,
+        datasets: [{ data: amounts }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false
+      }
+    });
+  }
+
+  // 長條圖：投資組合
+  async function updateBar(month){
+    const res = await fetchJSON(`/api/bar_portfolio_allocation?month=${month}`);
+    const labels = res.data.map(x => x.asset_class.toUpperCase());
+    const values = res.data.map(x => x.market_value);
+
+    const ctx = document.getElementById('barPortfolio').getContext('2d');
+    if(barChart) barChart.destroy();
+    barChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{ label: `${res.month} 市值`, data: values }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false
+      }
+    });
+  }
+
+  // 追蹤表格
+  async function updateTrackers(month){
+    const res = await fetchJSON(`/api/trackers?month=${month}`);
+    const rows = res.data.map(r => {
+      const rate = (r.progress != null) ? (r.progress*100).toFixed(1)+'%' : '--';
+      return `<tr>
+        <td>${r.name}</td>
+        <td>${r.spent.toLocaleString()}</td>
+        <td>${r.budget.toLocaleString()}</td>
+        <td>${rate}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('trackerBody').innerHTML = rows || `<tr><td colspan="4">本月無資料</td></tr>`;
+  }
+
+  monthSelect.addEventListener('change', updateAll);
+  initMonths();
+</script>
+{% endblock %}
