@@ -43,7 +43,10 @@
   <table class="table">
     <thead>
       <tr>
-        <th>項目</th><th>本月花費</th><th>預算</th><th>達成率</th>
+        <th>項目</th>
+        <th>本月花費</th>
+        <th>預算</th>
+        <th>達成率</th>
       </tr>
     </thead>
     <tbody id="trackerBody"></tbody>
@@ -60,7 +63,13 @@
     <table class="table">
       <thead>
         <tr>
-          <th>ID</th><th>日期</th><th>類型</th><th>類別</th><th>金額</th><th>明細</th><th>操作</th>
+          <th>ID</th>
+          <th>日期</th>
+          <th>類型</th>
+          <th>類別</th>
+          <th>金額</th>
+          <th>明細</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody id="txnBody"></tbody>
@@ -68,5 +77,509 @@
   </div>
 </section>
 
-<!-- 其餘（Modal等）保持不變 -->
+<!-- 理財目標 -->
+<section class="card theme-10">
+  <h3>🎯 理財目標</h3>
+
+  <form id="goalForm" class="form inline-form">
+    <div class="inline-row">
+      <input
+        type="text"
+        name="name"
+        placeholder="例如：日本自由行 ✈️"
+        required
+      />
+      <input
+        type="number"
+        name="target"
+        step="0.01"
+        placeholder="目標金額"
+        required
+      />
+      <input
+        type="number"
+        name="saved"
+        step="0.01"
+        placeholder="已存金額（可先填 0）"
+        value="0"
+      />
+      <button type="submit" class="btn primary">新增目標</button>
+    </div>
+  </form>
+
+  <div id="goalsList" class="goals-list"></div>
+</section>
+
+<!-- 新增/編輯 交易 Modal -->
+<div id="txnModal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="modalTitle">新增交易</h3>
+      <button
+        id="modalClose"
+        class="icon-btn"
+        aria-label="close"
+      >
+        ✕
+      </button>
+    </div>
+    <form id="txnForm" class="form">
+      <input type="hidden" name="id" />
+      <div class="row">
+        <label>收支類型</label>
+        <select name="type" required>
+          <option value="expense">支出</option>
+          <option value="income">收入</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>日期</label>
+        <input type="date" name="date" required />
+      </div>
+      <div class="row">
+        <label>類別</label>
+        <select name="category" required>
+          <option value="食物">食物</option>
+          <option value="交通">交通</option>
+          <option value="購物">購物</option>
+          <option value="娛樂">娛樂</option>
+          <option value="日用品">日用品</option>
+          <option value="投資">投資</option>
+          <option value="訂閱服務">訂閱服務</option>
+          <option value="其他">其他</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>交易明細</label>
+        <input
+          type="text"
+          name="note"
+          placeholder="例如：午餐、衣服、ETF 手續費..."
+        />
+      </div>
+      <div class="row">
+        <label>金額</label>
+        <input
+          type="number"
+          step="0.01"
+          name="amount"
+          required
+        />
+      </div>
+      <div class="modal-actions">
+        <button
+          type="button"
+          id="cancelBtn"
+          class="btn ghost"
+        >
+          取消
+        </button>
+        <button
+          type="submit"
+          class="btn primary"
+        >
+          儲存
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const monthSelect = document.getElementById("monthSelect");
+    let lineChart, pieChart, radarChart;
+
+    async function fetchJSON(url, opts) {
+      const r = await fetch(url, opts);
+      return r.json();
+    }
+
+    async function initMonths() {
+      const months = await fetchJSON("/api/months");
+      if (months && months.length) {
+        monthSelect.innerHTML = months
+          .map(
+            (m, idx) =>
+              `<option value="${m}" ${
+                idx === months.length - 1 ? "selected" : ""
+              }>${m}</option>`
+          )
+          .join("");
+      }
+      updateAll();
+    }
+
+    async function updateAll() {
+      const m = monthSelect.value;
+      await Promise.all([
+        updateKPIs(m),
+        updateLine(),
+        updatePie(m),
+        updateRadar(m),
+        updateTrackers(m),
+        updateTxnTable(m),
+        updateGoals(),
+      ]);
+    }
+
+    async function updateKPIs(month) {
+      const data = await fetchJSON(`/api/kpis?month=${month}`);
+      document.getElementById("kpiSavingsRate").textContent =
+        data.savings_rate != null
+          ? (data.savings_rate * 100).toFixed(1) + "%"
+          : "--";
+      document.getElementById("kpiROI").textContent =
+        data.monthly_roi != null
+          ? (data.monthly_roi * 100).toFixed(2) + "%"
+          : "—";
+      document.getElementById("kpiCashFlow").textContent =
+        data.cash_flow != null
+          ? data.cash_flow.toLocaleString()
+          : "--";
+      document.getElementById("kpiAssets").textContent =
+        data.assets_total != null
+          ? data.assets_total.toLocaleString()
+          : "--";
+    }
+
+    async function updateLine() {
+      const rows = await fetchJSON(
+        "/api/line_income_expense_balance"
+      );
+      const labels = rows.map((r) => r.month);
+      const income = rows.map((r) => r.income);
+      const expense = rows.map((r) => r.expense);
+      const balance = rows.map((r) => r.balance);
+      const ctx =
+        document.getElementById("lineMonthly").getContext("2d");
+      if (lineChart) lineChart.destroy();
+      lineChart = new Chart(ctx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            { label: "收入", data: income },
+            { label: "支出", data: expense },
+            { label: "結餘", data: balance },
+          ],
+        },
+        options: { responsive: true, maintainAspectRatio: false },
+      });
+    }
+
+    async function updatePie(month) {
+      const res = await fetchJSON(
+        `/api/pie_expense_by_category?month=${month}`
+      );
+      const labels = res.data.map((x) => x.category);
+      const amounts = res.data.map((x) => x.amount);
+      const ctx =
+        document.getElementById("pieExpense").getContext("2d");
+      if (pieChart) pieChart.destroy();
+      pieChart = new Chart(ctx, {
+        type: "pie",
+        data: {
+          labels,
+          datasets: [{ data: amounts }],
+        },
+        options: { responsive: true, maintainAspectRatio: false },
+      });
+    }
+
+    async function updateRadar(month) {
+      const res = await fetchJSON(
+        `/api/pie_expense_by_category?month=${month}`
+      );
+      const labels = res.data.map((x) => x.category);
+      const amounts = res.data.map((x) => x.amount);
+      const ctx =
+        document.getElementById("radarExpense").getContext("2d");
+      if (radarChart) radarChart.destroy();
+      radarChart = new Chart(ctx, {
+        type: "radar",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: `${month} 支出`,
+              data: amounts,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: { r: { beginAtZero: true } },
+        },
+      });
+    }
+
+    async function updateTrackers(month) {
+      const res = await fetchJSON(`/api/trackers?month=${month}`);
+      const rows = res.data
+        .map((r) => {
+          const rate =
+            r.progress != null
+              ? (r.progress * 100).toFixed(1) + "%"
+              : "--";
+          return `<tr>
+            <td>${r.name}</td>
+            <td>${r.spent.toLocaleString()}</td>
+            <td>${r.budget.toLocaleString()}</td>
+            <td>${rate}</td>
+          </tr>`;
+        })
+        .join("");
+      document.getElementById("trackerBody").innerHTML =
+        rows || `<tr><td colspan="4">本月無資料</td></tr>`;
+    }
+
+    // ----------------- 交易清單 & CRUD -----------------
+    const addBtn = document.getElementById("addTxnBtn");
+    const modal = document.getElementById("txnModal");
+    const modalClose = document.getElementById("modalClose");
+    const cancelBtn = document.getElementById("cancelBtn");
+    const form = document.getElementById("txnForm");
+    const modalTitle = document.getElementById("modalTitle");
+    const txnBody = document.getElementById("txnBody");
+
+    function openModal() {
+      if (!modal) return;
+      modal.classList.remove("hidden");
+    }
+    function closeModal() {
+      if (!modal) return;
+      modal.classList.add("hidden");
+      if (form) {
+        form.reset();
+        form.elements.id.value = "";
+      }
+    }
+
+    async function updateTxnTable(month) {
+      const res = await fetchJSON(
+        `/api/transactions?month=${month}`
+      );
+      const rows = res.data
+        .map((r) => {
+          const typeEmoji =
+            r.type === "income" ? "🟢" : "🔴";
+          return `<tr>
+            <td>${r.id}</td>
+            <td>${r.date}</td>
+            <td>${typeEmoji} ${r.type}</td>
+            <td>${r.category}</td>
+            <td>${Number(r.amount).toLocaleString()}</td>
+            <td>${
+              r.note
+                ? r.note
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                : ""
+            }</td>
+            <td class="actions">
+              <button class="btn tiny" data-edit="${r.id}">編輯</button>
+              <button class="btn tiny danger" data-del="${r.id}">刪除</button>
+            </td>
+          </tr>`;
+        })
+        .join("");
+      txnBody.innerHTML =
+        rows || `<tr><td colspan="7">尚無交易</td></tr>`;
+
+      txnBody
+        .querySelectorAll("[data-edit]")
+        .forEach((btn) => {
+          btn.addEventListener("click", () =>
+            startEdit(btn.getAttribute("data-edit"))
+          );
+        });
+      txnBody
+        .querySelectorAll("[data-del]")
+        .forEach((btn) => {
+          btn.addEventListener("click", () =>
+            delTxn(btn.getAttribute("data-del"))
+          );
+        });
+    }
+
+    function startEdit(id) {
+      const tr = [...txnBody.querySelectorAll("tr")].find(
+        (row) => row.children[0]?.textContent == id
+      );
+      if (!tr) return;
+      const [_, date, typeCell, category, amount, note] =
+        tr.children;
+      form.elements.id.value = id;
+      form.elements.date.value = date.textContent;
+      form.elements.type.value = typeCell.textContent.includes(
+        "income"
+      )
+        ? "income"
+        : "expense";
+      form.elements.category.value = category.textContent;
+      form.elements.amount.value =
+        amount.textContent.replace(/,/g, "");
+      form.elements.note.value = note.textContent;
+      modalTitle.textContent = "編輯交易";
+      openModal();
+    }
+
+    async function delTxn(id) {
+      if (!confirm("確定要刪除這筆交易嗎？")) return;
+      const res = await fetchJSON(
+        `/api/transactions/${id}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) {
+        await initMonths();
+      } else {
+        alert("刪除失敗");
+      }
+    }
+
+    if (addBtn)
+      addBtn.addEventListener("click", () => {
+        modalTitle.textContent = "新增交易";
+        openModal();
+      });
+    if (modalClose) modalClose.addEventListener("click", closeModal);
+    if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeModal();
+    });
+    window.addEventListener("click", (e) => {
+      if (e.target === modal) closeModal();
+    });
+
+    if (form) {
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const payload = {
+          type: fd.get("type"),
+          date: fd.get("date"),
+          category: fd.get("category"),
+          note: fd.get("note") || "",
+          amount: fd.get("amount"),
+        };
+        const id = fd.get("id");
+        let res;
+        if (id) {
+          res = await fetchJSON(
+            `/api/transactions/${id}`,
+            {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            }
+          );
+        } else {
+          res = await fetchJSON("/api/transactions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        }
+        if (res.ok) {
+          closeModal();
+          await initMonths();
+        } else {
+          alert(res.error || "儲存失敗");
+        }
+      });
+    }
+
+    // ----------------- 理財目標 Goals -----------------
+    const goalForm = document.getElementById("goalForm");
+    const goalsList = document.getElementById("goalsList");
+
+    async function updateGoals() {
+      if (!goalsList) return;
+      const res = await fetchJSON("/api/goals");
+      const items = res.data || [];
+
+      const html = items
+        .map((g) => {
+          const percent =
+            g.percent ??
+            (g.target > 0 ? (g.saved / g.target) * 100 : 0);
+          const pct = Math.max(
+            0,
+            Math.min(100, percent)
+          );
+          return `
+          <div class="goal-item">
+            <div class="goal-header">
+              <span class="goal-name">${g.name}</span>
+              <button class="btn tiny danger" data-goal-del="${g.id}">刪除</button>
+            </div>
+            <div class="goal-meta">
+              已存：${g.saved.toLocaleString()} / 目標：${g.target.toLocaleString()}（${pct.toFixed(1)}%）
+            </div>
+            <div class="goal-bar">
+              <div class="goal-bar-fill" style="width:${pct}%;"></div>
+            </div>
+          </div>
+        `;
+        })
+        .join("");
+
+      goalsList.innerHTML =
+        html ||
+        `<p class="empty-text">目前還沒有目標，可以從上方新增一個 ✨</p>`;
+
+      goalsList
+        .querySelectorAll("[data-goal-del]")
+        .forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const id = btn.getAttribute("data-goal-del");
+            if (!confirm("確定要刪除這個理財目標嗎？")) return;
+            const res = await fetchJSON(
+              `/api/goals/${id}`,
+              { method: "DELETE" }
+            );
+            if (res.ok) {
+              updateGoals();
+            } else {
+              alert("刪除失敗");
+            }
+          });
+        });
+    }
+
+    if (goalForm) {
+      goalForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(goalForm);
+        const payload = {
+          name: fd.get("name"),
+          target: fd.get("target"),
+          saved: fd.get("saved") || 0,
+        };
+        const res = await fetchJSON("/api/goals", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          goalForm.reset();
+          goalForm.elements.saved.value = 0;
+          updateGoals();
+        } else {
+          alert(res.error || "新增目標失敗");
+        }
+      });
+    }
+
+    if (monthSelect)
+      monthSelect.addEventListener("change", updateAll);
+
+    initMonths();
+  });
+</script>
 {% endblock %}
