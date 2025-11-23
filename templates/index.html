@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 
-<!-- KPI -->
+<!-- KPI 區 -->
 <section class="grid kpi-grid">
   <div class="card kpi-card theme-1">
     <div class="kpi-title">🧸 儲蓄率</div>
@@ -21,23 +21,41 @@
   </div>
 </section>
 
-<!-- 圖表 -->
+<!-- 圖表區 -->
 <section class="grid charts-grid">
   <div class="card theme-5">
     <h3>📅 收入 / 支出 / 結餘（月度）</h3>
     <canvas id="lineMonthly"></canvas>
   </div>
+
   <div class="card theme-6">
     <h3>🍰 支出分類（圓餅圖）</h3>
-    <canvas id="pieExpense"></canvas>
+    <div class="chart-wrapper">
+      <canvas id="pieExpense"></canvas>
+      <p
+        id="pieEmptyMsg"
+        class="empty-text chart-empty hidden"
+      >
+        本月尚無支出資料，新增交易後將自動產生圖表。
+      </p>
+    </div>
   </div>
+
   <div class="card theme-7">
     <h3>🧭 消費雷達圖（本月）</h3>
-    <canvas id="radarExpense"></canvas>
+    <div class="chart-wrapper">
+      <canvas id="radarExpense"></canvas>
+      <p
+        id="radarEmptyMsg"
+        class="empty-text chart-empty hidden"
+      >
+        本月尚無支出資料，新增交易後將自動產生圖表。
+      </p>
+    </div>
   </div>
 </section>
 
-<!-- 追蹤 -->
+<!-- 財務追蹤 -->
 <section class="card theme-8">
   <h3>📌 財務追蹤</h3>
   <table class="table">
@@ -57,7 +75,9 @@
 <section class="card theme-9">
   <div class="flex-between">
     <h3>🗒️ 交易清單</h3>
-    <button id="addTxnBtn" class="btn primary">＋ 新增交易</button>
+    <button id="addTxnBtn" class="btn primary">
+      ＋ 新增交易
+    </button>
   </div>
   <div class="table-scroll">
     <table class="table">
@@ -103,14 +123,16 @@
         placeholder="已存金額（可先填 0）"
         value="0"
       />
-      <button type="submit" class="btn primary">新增目標</button>
+      <button type="submit" class="btn primary">
+        新增目標
+      </button>
     </div>
   </form>
 
   <div id="goalsList" class="goals-list"></div>
 </section>
 
-<!-- 新增/編輯 交易 Modal -->
+<!-- 新增 / 編輯 交易 Modal -->
 <div id="txnModal" class="modal hidden">
   <div class="modal-content">
     <div class="modal-header">
@@ -147,6 +169,12 @@
           <option value="投資">投資</option>
           <option value="訂閱服務">訂閱服務</option>
           <option value="其他">其他</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>對應目標（可選）</label>
+        <select name="goal_id" id="goalSelect">
+          <option value="">（不指定）</option>
         </select>
       </div>
       <div class="row">
@@ -193,6 +221,11 @@
     const monthSelect = document.getElementById("monthSelect");
     let lineChart, pieChart, radarChart;
 
+    const pieCanvas = document.getElementById("pieExpense");
+    const radarCanvas = document.getElementById("radarExpense");
+    const pieEmptyMsg = document.getElementById("pieEmptyMsg");
+    const radarEmptyMsg = document.getElementById("radarEmptyMsg");
+
     async function fetchJSON(url, opts) {
       const r = await fetch(url, opts);
       return r.json();
@@ -226,16 +259,20 @@
       ]);
     }
 
+    // ----------------- KPI -----------------
     async function updateKPIs(month) {
       const data = await fetchJSON(`/api/kpis?month=${month}`);
+      // 儲蓄率 = (收入-支出)/收入
       document.getElementById("kpiSavingsRate").textContent =
         data.savings_rate != null
           ? (data.savings_rate * 100).toFixed(1) + "%"
           : "--";
+      // 投資報酬率（只含 investment_positions）
       document.getElementById("kpiROI").textContent =
         data.monthly_roi != null
           ? (data.monthly_roi * 100).toFixed(2) + "%"
           : "—";
+      // 月現金流 = 收入 - 支出
       document.getElementById("kpiCashFlow").textContent =
         data.cash_flow != null
           ? data.cash_flow.toLocaleString()
@@ -246,6 +283,7 @@
           : "--";
     }
 
+    // ----------------- 折線圖：收入 / 支出 / 結餘 -----------------
     async function updateLine() {
       const rows = await fetchJSON(
         "/api/line_income_expense_balance"
@@ -271,14 +309,31 @@
       });
     }
 
+    // ----------------- 支出分類圓餅圖 -----------------
     async function updatePie(month) {
       const res = await fetchJSON(
         `/api/pie_expense_by_category?month=${month}`
       );
       const labels = res.data.map((x) => x.category);
       const amounts = res.data.map((x) => x.amount);
-      const ctx =
-        document.getElementById("pieExpense").getContext("2d");
+      const hasData =
+        labels.length > 0 &&
+        amounts.some((v) => Number(v) > 0);
+
+      if (!hasData) {
+        if (pieChart) {
+          pieChart.destroy();
+          pieChart = null;
+        }
+        if (pieCanvas) pieCanvas.style.display = "none";
+        if (pieEmptyMsg) pieEmptyMsg.classList.remove("hidden");
+        return;
+      }
+
+      if (pieCanvas) pieCanvas.style.display = "block";
+      if (pieEmptyMsg) pieEmptyMsg.classList.add("hidden");
+
+      const ctx = pieCanvas.getContext("2d");
       if (pieChart) pieChart.destroy();
       pieChart = new Chart(ctx, {
         type: "pie",
@@ -290,14 +345,33 @@
       });
     }
 
+    // ----------------- 消費雷達圖 -----------------
     async function updateRadar(month) {
       const res = await fetchJSON(
         `/api/pie_expense_by_category?month=${month}`
       );
       const labels = res.data.map((x) => x.category);
       const amounts = res.data.map((x) => x.amount);
-      const ctx =
-        document.getElementById("radarExpense").getContext("2d");
+      const hasData =
+        labels.length > 0 &&
+        amounts.some((v) => Number(v) > 0);
+
+      if (!hasData) {
+        if (radarChart) {
+          radarChart.destroy();
+          radarChart = null;
+        }
+        if (radarCanvas) radarCanvas.style.display = "none";
+        if (radarEmptyMsg)
+          radarEmptyMsg.classList.remove("hidden");
+        return;
+      }
+
+      if (radarCanvas) radarCanvas.style.display = "block";
+      if (radarEmptyMsg)
+        radarEmptyMsg.classList.add("hidden");
+
+      const ctx = radarCanvas.getContext("2d");
       if (radarChart) radarChart.destroy();
       radarChart = new Chart(ctx, {
         type: "radar",
@@ -318,6 +392,7 @@
       });
     }
 
+    // ----------------- 財務追蹤 -----------------
     async function updateTrackers(month) {
       const res = await fetchJSON(`/api/trackers?month=${month}`);
       const rows = res.data
@@ -338,7 +413,7 @@
         rows || `<tr><td colspan="4">本月無資料</td></tr>`;
     }
 
-    // ----------------- 交易清單 & CRUD -----------------
+    // ----------------- 交易清單 & Modal -----------------
     const addBtn = document.getElementById("addTxnBtn");
     const modal = document.getElementById("txnModal");
     const modalClose = document.getElementById("modalClose");
@@ -346,6 +421,7 @@
     const form = document.getElementById("txnForm");
     const modalTitle = document.getElementById("modalTitle");
     const txnBody = document.getElementById("txnBody");
+    const goalSelect = document.getElementById("goalSelect");
 
     function openModal() {
       if (!modal) return;
@@ -360,6 +436,25 @@
       }
     }
 
+    // 載入目標下拉選單
+    async function loadGoalOptions(selectedId) {
+      if (!goalSelect) return;
+      const res = await fetchJSON("/api/goals");
+      const items = res.data || [];
+      let options = `<option value="">（不指定）</option>`;
+      options += items
+        .map(
+          (g) =>
+            `<option value="${g.id}" ${
+              selectedId && Number(selectedId) === g.id
+                ? "selected"
+                : ""
+            }>${g.name}</option>`
+        )
+        .join("");
+      goalSelect.innerHTML = options;
+    }
+
     async function updateTxnTable(month) {
       const res = await fetchJSON(
         `/api/transactions?month=${month}`
@@ -368,7 +463,9 @@
         .map((r) => {
           const typeEmoji =
             r.type === "income" ? "🟢" : "🔴";
-          return `<tr>
+          return `<tr data-goal-id="${
+            r.goal_id ?? ""
+          }">
             <td>${r.id}</td>
             <td>${r.date}</td>
             <td>${typeEmoji} ${r.type}</td>
@@ -388,9 +485,14 @@
           </tr>`;
         })
         .join("");
-      txnBody.innerHTML =
-        rows || `<tr><td colspan="7">尚無交易</td></tr>`;
 
+      if (!rows) {
+        txnBody.innerHTML = `<tr><td colspan="7">目前還沒有任何交易紀錄，點右上方「＋ 新增交易」開始記帳吧！</td></tr>`;
+      } else {
+        txnBody.innerHTML = rows;
+      }
+
+      // 綁定編輯 / 刪除
       txnBody
         .querySelectorAll("[data-edit]")
         .forEach((btn) => {
@@ -407,13 +509,18 @@
         });
     }
 
-    function startEdit(id) {
+    async function startEdit(id) {
       const tr = [...txnBody.querySelectorAll("tr")].find(
         (row) => row.children[0]?.textContent == id
       );
       if (!tr) return;
       const [_, date, typeCell, category, amount, note] =
         tr.children;
+      const goalId =
+        tr.getAttribute("data-goal-id") || "";
+
+      await loadGoalOptions(goalId || null);
+
       form.elements.id.value = id;
       form.elements.date.value = date.textContent;
       form.elements.type.value = typeCell.textContent.includes(
@@ -425,6 +532,8 @@
       form.elements.amount.value =
         amount.textContent.replace(/,/g, "");
       form.elements.note.value = note.textContent;
+      if (goalSelect)
+        goalSelect.value = goalId || "";
       modalTitle.textContent = "編輯交易";
       openModal();
     }
@@ -436,15 +545,16 @@
         { method: "DELETE" }
       );
       if (res.ok) {
-        await initMonths();
+        await initMonths(); // 重新算 KPI / 圖表 / 交易
       } else {
         alert("刪除失敗");
       }
     }
 
     if (addBtn)
-      addBtn.addEventListener("click", () => {
+      addBtn.addEventListener("click", async () => {
         modalTitle.textContent = "新增交易";
+        await loadGoalOptions(null);
         openModal();
       });
     if (modalClose) modalClose.addEventListener("click", closeModal);
@@ -466,6 +576,7 @@
           category: fd.get("category"),
           note: fd.get("note") || "",
           amount: fd.get("amount"),
+          goal_id: fd.get("goal_id") || null,
         };
         const id = fd.get("id");
         let res;
@@ -474,20 +585,24 @@
             `/api/transactions/${id}`,
             {
               method: "PUT",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+              },
               body: JSON.stringify(payload),
             }
           );
         } else {
           res = await fetchJSON("/api/transactions", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+            },
             body: JSON.stringify(payload),
           });
         }
         if (res.ok) {
           closeModal();
-          await initMonths();
+          await initMonths(); // 新增 / 編輯 後：收入 / 支出 / 結餘、KPI、圖表全部重算
         } else {
           alert(res.error || "儲存失敗");
         }
@@ -519,7 +634,9 @@
               <button class="btn tiny danger" data-goal-del="${g.id}">刪除</button>
             </div>
             <div class="goal-meta">
-              已存：${g.saved.toLocaleString()} / 目標：${g.target.toLocaleString()}（${pct.toFixed(1)}%）
+              已存：${g.saved.toLocaleString()} / 目標：${g.target.toLocaleString()}（${pct.toFixed(
+            1
+          )}%）
             </div>
             <div class="goal-bar">
               <div class="goal-bar-fill" style="width:${pct}%;"></div>
@@ -538,7 +655,10 @@
         .forEach((btn) => {
           btn.addEventListener("click", async () => {
             const id = btn.getAttribute("data-goal-del");
-            if (!confirm("確定要刪除這個理財目標嗎？")) return;
+            if (
+              !confirm("確定要刪除這個理財目標嗎？")
+            )
+              return;
             const res = await fetchJSON(
               `/api/goals/${id}`,
               { method: "DELETE" }
@@ -583,3 +703,4 @@
   });
 </script>
 {% endblock %}
+

@@ -36,13 +36,13 @@ def init_db():
         date TEXT NOT NULL,                 -- YYYY-MM-DD
         type TEXT NOT NULL CHECK(type IN ('income','expense')),
         amount REAL NOT NULL,
-        category TEXT NOT NULL,             -- 食物/交通/購物/娛樂/日用品/投資/其他/訂閱服務
+        category TEXT NOT NULL,
         note TEXT
     );
 
     CREATE TABLE IF NOT EXISTS investment_positions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,                 -- 月底快照 YYYY-MM-DD
+        date TEXT NOT NULL,
         asset_class TEXT NOT NULL CHECK(asset_class IN ('stock','etf','bond','fund')),
         market_value REAL NOT NULL,
         net_inflow REAL NOT NULL DEFAULT 0
@@ -50,7 +50,7 @@ def init_db():
 
     CREATE TABLE IF NOT EXISTS trackers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        month TEXT NOT NULL,                -- YYYY-MM
+        month TEXT NOT NULL,
         name TEXT NOT NULL,
         spent REAL NOT NULL DEFAULT 0,
         budget REAL NOT NULL DEFAULT 0
@@ -64,9 +64,14 @@ def init_db():
     );
     """
     )
+    # 確保 transactions 有 goal_id 欄位（舊 DB 也能安全遷移）
+    info = db.execute("PRAGMA table_info(transactions)").fetchall()
+    cols = [r["name"] for r in info]
+    if "goal_id" not in cols:
+        db.execute("ALTER TABLE transactions ADD COLUMN goal_id INTEGER")
     db.commit()
 
-    # 只在完全新 DB 時塞示例資料
+    # 只有第一次時塞入示例資料
     cur = db.execute("SELECT COUNT(1) AS c FROM transactions")
     if cur.fetchone()["c"] == 0:
         db.executemany(
@@ -121,9 +126,10 @@ with app.app_context():
 
 
 # -----------------------
-# 聚合工具
+# 聚合計算
 # -----------------------
 def aggregate_monthly_cash():
+    """月度：收入、支出、結餘（收入-支出）"""
     db = get_db()
     rows = db.execute(
         """
@@ -151,6 +157,7 @@ def aggregate_monthly_cash():
 
 
 def aggregate_expense_by_category(target_month=None):
+    """支出分類：依類別加總（支出）"""
     db = get_db()
     params = []
     sql = """
@@ -169,6 +176,7 @@ def aggregate_expense_by_category(target_month=None):
 
 
 def portfolio_by_month():
+    """投資部位：只看 investment_positions（不含消費）"""
     db = get_db()
     rows = db.execute(
         """
@@ -202,6 +210,7 @@ def portfolio_by_month():
 
 
 def total_assets_trend():
+    """累積現金 + 投資市值 → 資產總額趨勢"""
     monthly_cash = {x["month"]: x for x in aggregate_monthly_cash()}
     by_m, months, roi = portfolio_by_month()
     cash_acc = 0.0
@@ -229,7 +238,7 @@ def current_month():
     m2 = db.execute(
         "SELECT MAX(strftime('%Y-%m', date)) AS m FROM transactions"
     ).fetchone()["m"]
-    candidates = [m for m in [m1, m2] if m]
+    candidates = [m for m in (m1, m2) if m]
     if not candidates:
         return datetime.today().strftime("%Y-%m")
     return sorted(candidates)[-1]
@@ -271,6 +280,13 @@ def api_pie():
 
 @app.route("/api/kpis")
 def api_kpis():
+    """
+    1. 當月收入 = 所有 type='income' 金額加總
+    2. 當月支出 = 所有 type='expense' 金額加總
+    3. 月現金流 = 收入 − 支出
+    4. 儲蓄率   = (收入 − 支出) / 收入
+    5. 投資報酬率 = 只用 investment_positions 計算
+    """
     monthly = aggregate_monthly_cash()
     trend, roi_map = total_assets_trend()
     last_m = trend[-1]["month"] if trend else None
@@ -323,7 +339,9 @@ def api_trackers():
     return jsonify({"month": m, "data": data})
 
 
-# ------- 交易 CRUD -------
+# -----------------------
+# 交易 CRUD（含目標連動）
+# -----------------------
 @app.route("/api/transactions", methods=["GET", "POST"])
 def api_transactions():
     db = get_db()
@@ -333,7 +351,7 @@ def api_transactions():
         if m:
             rows = db.execute(
                 """
-                SELECT id, date, type, amount, category, note
+                SELECT id, date, type, amount, category, note, goal_id
                 FROM transactions
                 WHERE strftime('%Y-%m', date)=?
                 ORDER BY date, id
@@ -343,7 +361,7 @@ def api_transactions():
         else:
             rows = db.execute(
                 """
-                SELECT id, date, type, amount, category, note
+                SELECT id, date, type, amount, category, note, goal_id
                 FROM transactions
                 ORDER BY date, id
             """
@@ -357,6 +375,7 @@ def api_transactions():
     category = payload.get("category")
     note = payload.get("note", "")
     amount = payload.get("amount")
+    goal_id = payload.get("goal_id")
 
     if ttype not in ("income", "expense"):
         return jsonify({"ok": False, "error": "type must be income or expense"}), 400
@@ -373,10 +392,30 @@ def api_transactions():
     except Exception:
         return jsonify({"ok": False, "error": "amount must be positive"}), 400
 
+    # 目標驗證
+    if goal_id in ("", None):
+        goal_id_val = None
+    else:
+        try:
+            goal_id_val = int(goal_id)
+        except Exception:
+            return jsonify({"ok": False, "error": "goal_id invalid"}), 400
+        exists = db.execute("SELECT 1 FROM goals WHERE id=?", (goal_id_val,)).fetchone()
+        if not exists:
+            return jsonify({"ok": False, "error": "目標不存在"}), 400
+
     cur = db.execute(
-        "INSERT INTO transactions (date,type,amount,category,note) VALUES (?,?,?,?,?)",
-        (date, ttype, amount, category, note),
+        "INSERT INTO transactions (date,type,amount,category,note,goal_id) VALUES (?,?,?,?,?,?)",
+        (date, ttype, amount, category, note, goal_id_val),
     )
+
+    # 如果這筆「收入」有指定目標 → 自動累加目標 saved
+    if ttype == "income" and goal_id_val is not None:
+        db.execute(
+            "UPDATE goals SET saved = saved + ? WHERE id=?",
+            (amount, goal_id_val),
+        )
+
     db.commit()
     return jsonify({"ok": True, "id": cur.lastrowid})
 
@@ -384,22 +423,47 @@ def api_transactions():
 @app.route("/api/transactions/<int:tid>", methods=["PUT", "DELETE"])
 def api_transaction_detail(tid):
     db = get_db()
+
+    # DELETE：刪除交易，同時回沖目標金額
     if request.method == "DELETE":
+        row = db.execute(
+            "SELECT type, amount, goal_id FROM transactions WHERE id=?", (tid,)
+        ).fetchone()
+        if row:
+            if row["goal_id"] is not None and row["type"] == "income":
+                amt = row["amount"] or 0.0
+                db.execute(
+                    """
+                    UPDATE goals
+                    SET saved = CASE WHEN saved - ? >= 0 THEN saved - ? ELSE 0 END
+                    WHERE id=?
+                    """,
+                    (amt, amt, row["goal_id"]),
+                )
         db.execute("DELETE FROM transactions WHERE id=?", (tid,))
         db.commit()
         return jsonify({"ok": True})
 
-    # PUT：更新
+    # PUT：更新交易（包含可能更換目標或金額）
     payload = request.get_json(force=True)
+    old = db.execute(
+        "SELECT type, amount, goal_id FROM transactions WHERE id=?", (tid,)
+    ).fetchone()
+    if not old:
+        return jsonify({"ok": False, "error": "transaction not found"}), 404
+
     fields = []
     params = []
-    for key in ("date", "type", "amount", "category", "note"):
+
+    for key in ("date", "type", "amount", "category", "note", "goal_id"):
         if key not in payload:
             continue
         val = payload[key]
+
         if key == "type":
             if val not in ("income", "expense"):
                 return jsonify({"ok": False, "error": "type invalid"}), 400
+
         if key == "amount":
             try:
                 v = float(val)
@@ -411,6 +475,7 @@ def api_transaction_detail(tid):
                     jsonify({"ok": False, "error": "amount must be positive"}),
                     400,
                 )
+
         if key == "date":
             try:
                 datetime.strptime(val, "%Y-%m-%d")
@@ -419,6 +484,7 @@ def api_transaction_detail(tid):
                     jsonify({"ok": False, "error": "date must be YYYY-MM-DD"}),
                     400,
                 )
+
         if key == "category":
             if val not in (
                 "食物",
@@ -432,6 +498,19 @@ def api_transaction_detail(tid):
             ):
                 return jsonify({"ok": False, "error": "category invalid"}), 400
 
+        if key == "goal_id":
+            if val in ("", None):
+                val = None
+            else:
+                try:
+                    gid = int(val)
+                except Exception:
+                    return jsonify({"ok": False, "error": "goal_id invalid"}), 400
+                exists = db.execute("SELECT 1 FROM goals WHERE id=?", (gid,)).fetchone()
+                if not exists:
+                    return jsonify({"ok": False, "error": "目標不存在"}), 400
+                val = gid
+
         fields.append(f"{key}=?")
         params.append(val)
 
@@ -440,11 +519,39 @@ def api_transaction_detail(tid):
 
     params.append(tid)
     db.execute(f"UPDATE transactions SET {', '.join(fields)} WHERE id=?", params)
+
+    # 更新後重新查詢，調整目標 saved
+    new = db.execute(
+        "SELECT type, amount, goal_id FROM transactions WHERE id=?", (tid,)
+    ).fetchone()
+
+    # 把舊紀錄對目標的貢獻先扣掉
+    if old["goal_id"] is not None and old["type"] == "income":
+        amt = old["amount"] or 0.0
+        db.execute(
+            """
+            UPDATE goals
+            SET saved = CASE WHEN saved - ? >= 0 THEN saved - ? ELSE 0 END
+            WHERE id=?
+            """,
+            (amt, amt, old["goal_id"]),
+        )
+
+    # 再把新紀錄的貢獻加回去
+    if new["goal_id"] is not None and new["type"] == "income":
+        amt2 = new["amount"] or 0.0
+        db.execute(
+            "UPDATE goals SET saved = saved + ? WHERE id=?",
+            (amt2, new["goal_id"]),
+        )
+
     db.commit()
     return jsonify({"ok": True})
 
 
-# ------- 理財目標 Goals API -------
+# -----------------------
+# 理財目標 Goals API
+# -----------------------
 @app.route("/api/goals", methods=["GET", "POST"])
 def api_goals():
     db = get_db()
@@ -468,7 +575,7 @@ def api_goals():
             )
         return jsonify({"data": data})
 
-    # POST：新增目標
+    # 新增目標（含目前已存金額）
     payload = request.get_json(force=True)
     name = (payload.get("name") or "").strip()
     target = payload.get("target")

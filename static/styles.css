@@ -102,7 +102,7 @@ body {
   grid-template-columns: 1.2fr 0.8fr 1fr;
 }
 
-/* 共用卡片：顏色由 theme-* 覆寫 */
+/* 卡片基礎樣式 */
 .card {
   border-radius: 18px;
   padding: 16px;
@@ -120,7 +120,7 @@ body {
   gap: 6px;
 }
 
-/* 異色粉彩主題 */
+/* 不同區塊不同柔和色 */
 .card.theme-1 {
   background: var(--p1);
   border-color: var(--p1-br);
@@ -162,7 +162,7 @@ body {
   border-color: var(--p10-br);
 }
 
-/* KPI 卡片 */
+/* KPI 卡 */
 .kpi-card {
   display: flex;
   flex-direction: column;
@@ -246,18 +246,29 @@ body {
   color: #fff;
 }
 
-/* 行內操作 */
 .actions {
   display: flex;
   gap: 8px;
 }
 
-/* 圖表 Canvas：透明以吃到底色 */
+/* 圖表 */
 canvas {
   width: 100% !important;
   height: 280px !important;
   border-radius: 14px;
   background: transparent;
+}
+
+.chart-wrapper {
+  position: relative;
+  min-height: 260px;
+}
+
+.chart-empty {
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 8px;
 }
 
 /* Footer */
@@ -267,7 +278,7 @@ canvas {
   text-align: center;
 }
 
-/* flex 工具 */
+/* 工具 flex */
 .flex-between {
   display: flex;
   justify-content: space-between;
@@ -276,9 +287,8 @@ canvas {
 }
 
 /* Modal */
-.modal.hidden {
-  display: none;
-  pointer-events: none;
+.hidden {
+  display: none !important;
 }
 
 .modal {
@@ -290,6 +300,10 @@ canvas {
   justify-content: center;
   padding: 16px;
   z-index: 9999;
+}
+
+.modal.hidden {
+  pointer-events: none;
 }
 
 .modal-content {
