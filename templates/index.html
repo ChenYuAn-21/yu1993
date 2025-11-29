@@ -32,10 +32,7 @@
     <h3>🍰 支出分類（圓餅圖）</h3>
     <div class="chart-wrapper">
       <canvas id="pieExpense"></canvas>
-      <p
-        id="pieEmptyMsg"
-        class="empty-text chart-empty hidden"
-      >
+      <p id="pieEmptyMsg" class="empty-text chart-empty hidden">
         本月尚無支出資料，新增交易後將自動產生圖表。
       </p>
     </div>
@@ -45,10 +42,7 @@
     <h3>🧭 消費雷達圖（本月）</h3>
     <div class="chart-wrapper">
       <canvas id="radarExpense"></canvas>
-      <p
-        id="radarEmptyMsg"
-        class="empty-text chart-empty hidden"
-      >
+      <p id="radarEmptyMsg" class="empty-text chart-empty hidden">
         本月尚無支出資料，新增交易後將自動產生圖表。
       </p>
     </div>
@@ -58,6 +52,40 @@
 <!-- 財務追蹤 -->
 <section class="card theme-8">
   <h3>📌 財務追蹤</h3>
+
+  <!-- 新增財務追蹤項目表單 -->
+  <form id="trackerForm" class="form inline-form">
+    <div class="inline-row">
+      <input
+        type="text"
+        name="name"
+        placeholder="例如：食物預算"
+        required
+      />
+      <input
+        type="number"
+        name="budget"
+        step="0.01"
+        placeholder="預算金額"
+        required
+      />
+      <select name="category">
+        <option value="">不綁定類別（手動）</option>
+        <option value="食物">食物</option>
+        <option value="交通">交通</option>
+        <option value="購物">購物</option>
+        <option value="娛樂">娛樂</option>
+        <option value="日用品">日用品</option>
+        <option value="投資">投資</option>
+        <option value="訂閱服務">訂閱服務</option>
+        <option value="其他">其他</option>
+      </select>
+      <button type="submit" class="btn primary">
+        ＋ 新增追蹤項目
+      </button>
+    </div>
+  </form>
+
   <table class="table">
     <thead>
       <tr>
@@ -65,6 +93,7 @@
         <th>本月花費</th>
         <th>預算</th>
         <th>達成率</th>
+        <th>操作</th>
       </tr>
     </thead>
     <tbody id="trackerBody"></tbody>
@@ -101,7 +130,6 @@
 <section class="card theme-10">
   <h3>🎯 理財目標</h3>
 
-  <!-- 三個欄位：目標名稱 / 目標金額 / 目前累積 -->
   <form id="goalForm" class="form inline-form">
     <div class="inline-row">
       <input
@@ -129,7 +157,6 @@
     </div>
   </form>
 
-  <!-- 顯示：目標名稱 / 目標金額 / 目前累積 / 達成率 + 進度條 -->
   <div id="goalsList" class="goals-list"></div>
 </section>
 
@@ -138,11 +165,7 @@
   <div class="modal-content">
     <div class="modal-header">
       <h3 id="modalTitle">新增交易</h3>
-      <button
-        id="modalClose"
-        class="icon-btn"
-        aria-label="close"
-      >
+      <button id="modalClose" class="icon-btn" aria-label="close">
         ✕
       </button>
     </div>
@@ -173,7 +196,6 @@
         </select>
       </div>
 
-      <!-- ✅ 加上說明文字 -->
       <div class="row">
         <label>對應目標（可選，會自動累加到理財目標）</label>
         <select name="goal_id" id="goalSelect">
@@ -191,25 +213,13 @@
       </div>
       <div class="row">
         <label>金額</label>
-        <input
-          type="number"
-          step="0.01"
-          name="amount"
-          required
-        />
+        <input type="number" step="0.01" name="amount" required />
       </div>
       <div class="modal-actions">
-        <button
-          type="button"
-          id="cancelBtn"
-          class="btn ghost"
-        >
+        <button type="button" id="cancelBtn" class="btn ghost">
           取消
         </button>
-        <button
-          type="submit"
-          class="btn primary"
-        >
+        <button type="submit" class="btn primary">
           儲存
         </button>
       </div>
@@ -229,6 +239,9 @@
     const radarCanvas = document.getElementById("radarExpense");
     const pieEmptyMsg = document.getElementById("pieEmptyMsg");
     const radarEmptyMsg = document.getElementById("radarEmptyMsg");
+
+    const trackerForm = document.getElementById("trackerForm");
+    const trackerBody = document.getElementById("trackerBody");
 
     // 莫蘭迪藍 / 粉 / 紫色系
     const morandiColors = [
@@ -253,9 +266,7 @@
         monthSelect.innerHTML = months
           .map(
             (m, idx) =>
-              `<option value="${m}" ${
-                idx === months.length - 1 ? "selected" : ""
-              }>${m}</option>`
+              `<option value="${m}" ${idx === months.length - 1 ? "selected" : ""}>${m}</option>`
           )
           .join("");
       }
@@ -279,34 +290,23 @@
     async function updateKPIs(month) {
       const data = await fetchJSON(`/api/kpis?month=${month}`);
       document.getElementById("kpiSavingsRate").textContent =
-        data.savings_rate != null
-          ? (data.savings_rate * 100).toFixed(1) + "%"
-          : "--";
+        data.savings_rate != null ? (data.savings_rate * 100).toFixed(1) + "%" : "--";
       document.getElementById("kpiROI").textContent =
-        data.monthly_roi != null
-          ? (data.monthly_roi * 100).toFixed(2) + "%"
-          : "—";
+        data.monthly_roi != null ? (data.monthly_roi * 100).toFixed(2) + "%" : "—";
       document.getElementById("kpiCashFlow").textContent =
-        data.cash_flow != null
-          ? data.cash_flow.toLocaleString()
-          : "--";
+        data.cash_flow != null ? data.cash_flow.toLocaleString() : "--";
       document.getElementById("kpiAssets").textContent =
-        data.assets_total != null
-          ? data.assets_total.toLocaleString()
-          : "--";
+        data.assets_total != null ? data.assets_total.toLocaleString() : "--";
     }
 
     // ----------------- 折線圖 -----------------
     async function updateLine() {
-      const rows = await fetchJSON(
-        "/api/line_income_expense_balance"
-      );
+      const rows = await fetchJSON("/api/line_income_expense_balance");
       const labels = rows.map((r) => r.month);
       const income = rows.map((r) => r.income);
       const expense = rows.map((r) => r.expense);
       const balance = rows.map((r) => r.balance);
-      const ctx =
-        document.getElementById("lineMonthly").getContext("2d");
+      const ctx = document.getElementById("lineMonthly").getContext("2d");
       if (lineChart) lineChart.destroy();
       lineChart = new Chart(ctx, {
         type: "line",
@@ -324,14 +324,10 @@
 
     // ----------------- 支出分類圓餅圖 -----------------
     async function updatePie(month) {
-      const res = await fetchJSON(
-        `/api/pie_expense_by_category?month=${month}`
-      );
+      const res = await fetchJSON(`/api/pie_expense_by_category?month=${month}`);
       const labels = res.data.map((x) => x.category);
       const amounts = res.data.map((x) => x.amount);
-      const hasData =
-        labels.length > 0 &&
-        amounts.some((v) => Number(v) > 0);
+      const hasData = labels.length > 0 && amounts.some((v) => Number(v) > 0);
 
       if (!hasData) {
         if (pieChart) {
@@ -367,14 +363,10 @@
 
     // ----------------- 消費雷達圖 -----------------
     async function updateRadar(month) {
-      const res = await fetchJSON(
-        `/api/pie_expense_by_category?month=${month}`
-      );
+      const res = await fetchJSON(`/api/pie_expense_by_category?month=${month}`);
       const labels = res.data.map((x) => x.category);
       const amounts = res.data.map((x) => x.amount);
-      const hasData =
-        labels.length > 0 &&
-        amounts.some((v) => Number(v) > 0);
+      const hasData = labels.length > 0 && amounts.some((v) => Number(v) > 0);
 
       if (!hasData) {
         if (radarChart) {
@@ -382,14 +374,12 @@
           radarChart = null;
         }
         if (radarCanvas) radarCanvas.style.display = "none";
-        if (radarEmptyMsg)
-          radarEmptyMsg.classList.remove("hidden");
+        if (radarEmptyMsg) radarEmptyMsg.classList.remove("hidden");
         return;
       }
 
       if (radarCanvas) radarCanvas.style.display = "block";
-      if (radarEmptyMsg)
-        radarEmptyMsg.classList.add("hidden");
+      if (radarEmptyMsg) radarEmptyMsg.classList.add("hidden");
 
       const ctx = radarCanvas.getContext("2d");
       if (radarChart) radarChart.destroy();
@@ -418,19 +408,67 @@
       const rows = res.data
         .map((r) => {
           const rate =
-            r.progress != null
-              ? (r.progress * 100).toFixed(1) + "%"
-              : "--";
+            r.progress != null ? (r.progress * 100).toFixed(1) + "%" : "--";
           return `<tr>
             <td>${r.name}</td>
             <td>${r.spent.toLocaleString()}</td>
             <td>${r.budget.toLocaleString()}</td>
             <td>${rate}</td>
+            <td>
+              <button class="btn tiny danger" data-tracker-del="${r.id}">
+                刪除
+              </button>
+            </td>
           </tr>`;
         })
         .join("");
-      document.getElementById("trackerBody").innerHTML =
-        rows || `<tr><td colspan="4">本月無資料</td></tr>`;
+
+      trackerBody.innerHTML =
+        rows || `<tr><td colspan="5">本月無資料</td></tr>`;
+
+      // 綁定刪除按鈕事件
+      trackerBody
+        .querySelectorAll("[data-tracker-del]")
+        .forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const id = btn.getAttribute("data-tracker-del");
+            if (!confirm("確定要刪除這個追蹤項目嗎？")) return;
+
+            const resDel = await fetchJSON(`/api/trackers/${id}`, {
+              method: "DELETE",
+            });
+            if (resDel.ok) {
+              updateTrackers(month);
+            } else {
+              alert("刪除失敗");
+            }
+          });
+        });
+    }
+
+    // 新增財務追蹤項目
+    if (trackerForm) {
+      trackerForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const fd = new FormData(trackerForm);
+        const payload = {
+          name: fd.get("name"),
+          budget: fd.get("budget"),
+          category: fd.get("category") || null,
+          month: monthSelect.value || undefined,
+        };
+        const res = await fetchJSON("/api/trackers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          trackerForm.reset();
+          updateTrackers(monthSelect.value);
+        } else {
+          alert(res.error || "新增追蹤項目失敗");
+        }
+      });
     }
 
     // ----------------- 交易清單 & Modal -----------------
@@ -456,7 +494,6 @@
       }
     }
 
-    // 載入目標下拉（供交易指定）
     async function loadGoalOptions(selectedId) {
       if (!goalSelect) return;
       const res = await fetchJSON("/api/goals");
@@ -466,9 +503,7 @@
         .map(
           (g) =>
             `<option value="${g.id}" ${
-              selectedId && Number(selectedId) === g.id
-                ? "selected"
-                : ""
+              selectedId && Number(selectedId) === g.id ? "selected" : ""
             }>${g.name}</option>`
         )
         .join("");
@@ -476,16 +511,11 @@
     }
 
     async function updateTxnTable(month) {
-      const res = await fetchJSON(
-        `/api/transactions?month=${month}`
-      );
+      const res = await fetchJSON(`/api/transactions?month=${month}`);
       const rows = res.data
         .map((r) => {
-          const typeEmoji =
-            r.type === "income" ? "🟢" : "🔴";
-          return `<tr data-goal-id="${
-            r.goal_id ?? ""
-          }">
+          const typeEmoji = r.type === "income" ? "🟢" : "🔴";
+          return `<tr data-goal-id="${r.goal_id ?? ""}">
             <td>${r.id}</td>
             <td>${r.date}</td>
             <td>${typeEmoji} ${r.type}</td>
@@ -493,9 +523,7 @@
             <td>${Number(r.amount).toLocaleString()}</td>
             <td>${
               r.note
-                ? r.note
-                    .replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;")
+                ? r.note.replace(/</g, "&lt;").replace(/>/g, "&gt;")
                 : ""
             }</td>
             <td class="actions">
@@ -507,62 +535,50 @@
         .join("");
 
       if (!rows) {
-        txnBody.innerHTML = `<tr><td colspan="7">目前還沒有任何交易紀錄，點右上方「＋ 新增交易」開始記帳吧！</td></tr>`;
+        txnBody.innerHTML =
+          `<tr><td colspan="7">目前還沒有任何交易紀錄，點右上方「＋ 新增交易」開始記帳吧！</td></tr>`;
       } else {
         txnBody.innerHTML = rows;
       }
 
-      txnBody
-        .querySelectorAll("[data-edit]")
-        .forEach((btn) => {
-          btn.addEventListener("click", () =>
-            startEdit(btn.getAttribute("data-edit"))
-          );
-        });
-      txnBody
-        .querySelectorAll("[data-del]")
-        .forEach((btn) => {
-          btn.addEventListener("click", () =>
-            delTxn(btn.getAttribute("data-del"))
-          );
-        });
+      txnBody.querySelectorAll("[data-edit]").forEach((btn) => {
+        btn.addEventListener("click", () => startEdit(btn.getAttribute("data-edit")));
+      });
+      txnBody.querySelectorAll("[data-del]").forEach((btn) => {
+        btn.addEventListener("click", () => delTxn(btn.getAttribute("data-del")));
+      });
     }
 
     async function startEdit(id) {
       const tr = [...txnBody.querySelectorAll("tr")].find(
-        (row) => row.children[0]?.textContent == id
+        (row) => row.children[0] && row.children[0].textContent == id
       );
       if (!tr) return;
-      const [_, date, typeCell, category, amount, note] =
-        tr.children;
-      const goalId =
-        tr.getAttribute("data-goal-id") || "";
+
+      const [_, date, typeCell, category, amount, note] = tr.children;
+      const goalId = tr.getAttribute("data-goal-id") || "";
 
       await loadGoalOptions(goalId || null);
 
       form.elements.id.value = id;
       form.elements.date.value = date.textContent;
-      form.elements.type.value = typeCell.textContent.includes(
-        "income"
-      )
+      form.elements.type.value = typeCell.textContent.includes("income")
         ? "income"
         : "expense";
       form.elements.category.value = category.textContent;
-      form.elements.amount.value =
-        amount.textContent.replace(/,/g, "");
+      form.elements.amount.value = amount.textContent.replace(/,/g, "");
       form.elements.note.value = note.textContent;
-      if (goalSelect)
-        goalSelect.value = goalId || "";
+      if (goalSelect) goalSelect.value = goalId || "";
+
       modalTitle.textContent = "編輯交易";
       openModal();
     }
 
     async function delTxn(id) {
       if (!confirm("確定要刪除這筆交易嗎？")) return;
-      const res = await fetchJSON(
-        `/api/transactions/${id}`,
-        { method: "DELETE" }
-      );
+      const res = await fetchJSON(`/api/transactions/${id}`, {
+        method: "DELETE",
+      });
       if (res.ok) {
         await initMonths();
       } else {
@@ -570,12 +586,13 @@
       }
     }
 
-    if (addBtn)
+    if (addBtn) {
       addBtn.addEventListener("click", async () => {
         modalTitle.textContent = "新增交易";
         await loadGoalOptions(null);
         openModal();
       });
+    }
     if (modalClose) modalClose.addEventListener("click", closeModal);
     if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
     window.addEventListener("keydown", (e) => {
@@ -600,22 +617,15 @@
         const id = fd.get("id");
         let res;
         if (id) {
-          res = await fetchJSON(
-            `/api/transactions/${id}`,
-            {
-              method: "PUT",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(payload),
-            }
-          );
+          res = await fetchJSON(`/api/transactions/${id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
         } else {
           res = await fetchJSON("/api/transactions", {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
           });
         }
@@ -640,12 +650,8 @@
       const html = items
         .map((g) => {
           const percent =
-            g.percent ??
-            (g.target > 0 ? (g.saved / g.target) * 100 : 0);
-          const pct = Math.max(
-            0,
-            Math.min(100, percent)
-          );
+            g.percent ?? (g.target > 0 ? (g.saved / g.target) * 100 : 0);
+          const pct = Math.max(0, Math.min(100, percent));
           return `
           <div class="goal-item">
             <div class="goal-header">
@@ -666,29 +672,22 @@
         .join("");
 
       goalsList.innerHTML =
-        html ||
-        `<p class="empty-text">目前還沒有目標，可以從上方新增一個 ✨</p>`;
+        html || `<p class="empty-text">目前還沒有目標，可以從上方新增一個 ✨</p>`;
 
-      goalsList
-        .querySelectorAll("[data-goal-del]")
-        .forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const id = btn.getAttribute("data-goal-del");
-            if (
-              !confirm("確定要刪除這個理財目標嗎？")
-            )
-              return;
-            const res = await fetchJSON(
-              `/api/goals/${id}`,
-              { method: "DELETE" }
-            );
-            if (res.ok) {
-              updateGoals();
-            } else {
-              alert("刪除失敗");
-            }
+      goalsList.querySelectorAll("[data-goal-del]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-goal-del");
+          if (!confirm("確定要刪除這個理財目標嗎？")) return;
+          const res = await fetchJSON(`/api/goals/${id}`, {
+            method: "DELETE",
           });
+          if (res.ok) {
+            updateGoals();
+          } else {
+            alert("刪除失敗");
+          }
         });
+      });
     }
 
     if (goalForm) {
@@ -698,7 +697,7 @@
         const payload = {
           name: fd.get("name"),
           target: fd.get("target"),
-          saved: fd.get("saved"), // 留空就丟空字串，後端會當 0
+          saved: fd.get("saved"),
         };
         const res = await fetchJSON("/api/goals", {
           method: "POST",
@@ -706,7 +705,7 @@
           body: JSON.stringify(payload),
         });
         if (res.ok) {
-          goalForm.reset();   // 不再幫你填 0
+          goalForm.reset();
           updateGoals();
         } else {
           alert(res.error || "新增目標失敗");
@@ -714,8 +713,9 @@
       });
     }
 
-    if (monthSelect)
+    if (monthSelect) {
       monthSelect.addEventListener("change", updateAll);
+    }
 
     initMonths();
   });

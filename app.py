@@ -1,7 +1,6 @@
 import os
 import sqlite3
 from datetime import datetime
-from collections import defaultdict
 
 from flask import Flask, render_template, jsonify, request, g
 
@@ -48,6 +47,7 @@ def init_db():
         note TEXT
     );
 
+    -- 保留原本投資部位表（目前 KPI 不用它，但不刪除）
     CREATE TABLE IF NOT EXISTS investment_positions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         date TEXT NOT NULL,
@@ -64,7 +64,6 @@ def init_db():
         budget REAL NOT NULL DEFAULT 0
     );
 
-    -- 🎯 理財目標：name / target / saved(手動初始累積)
     CREATE TABLE IF NOT EXISTS goals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -77,57 +76,9 @@ def init_db():
     # 舊資料表補欄位
     ensure_column(db, "transactions", "goal_id", "INTEGER")
     ensure_column(db, "goals", "saved", "REAL NOT NULL DEFAULT 0")
+    ensure_column(db, "trackers", "category", "TEXT")  # 用來對應支出類別
 
     db.commit()
-
-    # 若完全沒有交易，塞一些示範資料
-    cur = db.execute("SELECT COUNT(1) AS c FROM transactions")
-    if cur.fetchone()["c"] == 0:
-        db.executemany(
-            "INSERT INTO transactions (date,type,amount,category,note) VALUES (?,?,?,?,?)",
-            [
-                ("2025-01-05", "income", 52000, "其他", "January salary"),
-                ("2025-01-08", "expense", 4200, "食物", "Food & dining"),
-                ("2025-01-12", "expense", 399, "訂閱服務", "Netflix"),
-                ("2025-01-15", "expense", 3500, "其他", "Gifts"),
-                ("2025-01-28", "expense", 1500, "投資", "Stock fee"),
-                ("2025-02-05", "income", 52000, "其他", "February salary"),
-                ("2025-02-09", "expense", 4800, "食物", "Food & dining"),
-                ("2025-02-12", "expense", 399, "訂閱服務", "Netflix"),
-                ("2025-02-19", "expense", 2100, "購物", "Shopping"),
-                ("2025-02-25", "expense", 1200, "投資", "ETF fee"),
-                ("2025-03-05", "income", 52000, "其他", "March salary"),
-                ("2025-03-07", "expense", 5000, "食物", "Food & dining"),
-                ("2025-03-12", "expense", 399, "訂閱服務", "Netflix"),
-                ("2025-03-20", "expense", 3500, "購物", "Clothes"),
-                ("2025-03-29", "expense", 1500, "投資", "Fund fee"),
-            ],
-        )
-        db.executemany(
-            "INSERT INTO investment_positions (date,asset_class,market_value,net_inflow) VALUES (?,?,?,?)",
-            [
-                ("2025-01-31", "stock", 120000, 5000),
-                ("2025-01-31", "etf", 80000, 0),
-                ("2025-01-31", "bond", 30000, 0),
-                ("2025-01-31", "fund", 20000, 2000),
-                ("2025-02-28", "stock", 126000, 3000),
-                ("2025-02-28", "etf", 83000, 0),
-                ("2025-02-28", "bond", 30200, 0),
-                ("2025-02-28", "fund", 22300, 1000),
-                ("2025-03-31", "stock", 129000, 2000),
-                ("2025-03-31", "etf", 85000, 0),
-                ("2025-03-31", "bond", 30500, 0),
-                ("2025-03-31", "fund", 23500, 1000),
-            ],
-        )
-        db.executemany(
-            "INSERT INTO trackers (month,name,spent,budget) VALUES (?,?,?,?)",
-            [
-                ("2025-03", "食物花費", 5000, 6000),
-                ("2025-03", "購物金", 3500, 4000),
-            ],
-        )
-        db.commit()
 
 
 with app.app_context():
@@ -135,8 +86,19 @@ with app.app_context():
 
 
 # -----------------------
-# 聚合計算
+# 工具函式
 # -----------------------
+def current_month():
+    """根據 transactions 的最大日期來決定目前的月份。"""
+    db = get_db()
+    row = db.execute(
+        "SELECT MAX(strftime('%Y-%m', date)) AS m FROM transactions"
+    ).fetchone()
+    if row and row["m"]:
+        return row["m"]
+    return datetime.today().strftime("%Y-%m")
+
+
 def aggregate_monthly_cash():
     db = get_db()
     rows = db.execute(
@@ -182,71 +144,60 @@ def aggregate_expense_by_category(target_month=None):
     ]
 
 
-def portfolio_by_month():
-    db = get_db()
-    rows = db.execute(
-        """
-        SELECT strftime('%Y-%m', date) AS m, asset_class,
-               SUM(market_value) AS mv, SUM(net_inflow) AS inflow
-        FROM investment_positions
-        GROUP BY m, asset_class
-        ORDER BY m
+# ===== 投資報酬率（用 transactions 的「投資」類別） =====
+def calculate_investment_roi(month=None):
     """
-    ).fetchall()
-    by_m = defaultdict(lambda: defaultdict(float))
-    for r in rows:
-        by_m[r["m"]][r["asset_class"]] += r["mv"] or 0.0
-        by_m[r["m"]]["_total"] += r["mv"] or 0.0
-        by_m[r["m"]]["_net_inflow"] += r["inflow"] or 0.0
-
-    months = sorted(by_m.keys())
-    roi = {}
-    for i, m in enumerate(months):
-        mv_end = by_m[m]["_total"]
-        inflow = by_m[m]["_net_inflow"]
-        if i == 0:
-            roi[m] = None
-        else:
-            prev_m = months[i - 1]
-            mv_start = by_m[prev_m]["_total"]
-            roi[m] = (
-                round((mv_end - mv_start - inflow) / mv_start, 4) if mv_start > 0 else None
-            )
-    return by_m, months, roi
-
-
-def total_assets_trend():
-    monthly_cash = {x["month"]: x for x in aggregate_monthly_cash()}
-    by_m, months, roi = portfolio_by_month()
-    cash_acc = 0.0
-    trend = []
-    for m in months:
-        if m in monthly_cash:
-            cash_acc += monthly_cash[m]["balance"]
-        mv = by_m[m]["_total"]
-        trend.append(
-            {
-                "month": m,
-                "cash": round(cash_acc, 2),
-                "investment": round(mv, 2),
-                "total": round(cash_acc + mv, 2),
-            }
-        )
-    return trend, roi
-
-
-def current_month():
+    用 transactions 表中 category='投資' 的收支計算投資報酬率。
+    ROI = (投資相關收入總額 - 投資相關支出總額) / 投資相關支出總額
+    """
     db = get_db()
-    m1 = db.execute(
-        "SELECT MAX(strftime('%Y-%m', date)) AS m FROM investment_positions"
-    ).fetchone()["m"]
-    m2 = db.execute(
-        "SELECT MAX(strftime('%Y-%m', date)) AS m FROM transactions"
-    ).fetchone()["m"]
-    candidates = [m for m in (m1, m2) if m]
-    if not candidates:
-        return datetime.today().strftime("%Y-%m")
-    return sorted(candidates)[-1]
+    if month is None:
+        month = current_month()
+
+    row = db.execute(
+        """
+        SELECT
+            SUM(CASE WHEN type='expense' THEN amount ELSE 0 END) AS invested,
+            SUM(CASE WHEN type='income'  THEN amount ELSE 0 END) AS returned
+        FROM transactions
+        WHERE category='投資'
+          AND strftime('%Y-%m', date)=?
+        """,
+        (month,),
+    ).fetchone()
+
+    invested = row["invested"] or 0.0
+    returned = row["returned"] or 0.0
+
+    if invested <= 0:
+        return month, None
+
+    roi = (returned - invested) / invested
+    return month, round(roi, 4)
+
+
+# ===== 資產總額（用所有交易的累積現金） =====
+def calculate_total_assets(month=None):
+    """
+    資產總額簡化定義為：截至該月份為止的累積淨現金流。
+    total_assets = Σ(所有收入) - Σ(所有支出)，日期<=該月份。
+    """
+    db = get_db()
+    if month is None:
+        month = current_month()
+
+    row = db.execute(
+        """
+        SELECT
+            SUM(CASE WHEN type='income' THEN amount ELSE -amount END) AS net
+        FROM transactions
+        WHERE strftime('%Y-%m', date) <= ?
+        """,
+        (month,),
+    ).fetchone()
+
+    net = row["net"] or 0.0
+    return month, round(net, 2)
 
 
 # -----------------------
@@ -262,11 +213,10 @@ def api_months():
     db = get_db()
     rows = db.execute(
         """
-        SELECT strftime('%Y-%m', date) AS m FROM transactions
-        UNION
-        SELECT strftime('%Y-%m', date) AS m FROM investment_positions
+        SELECT DISTINCT strftime('%Y-%m', date) AS m
+        FROM transactions
         ORDER BY m
-    """
+        """
     ).fetchall()
     return jsonify([r["m"] for r in rows])
 
@@ -285,10 +235,16 @@ def api_pie():
 
 @app.route("/api/kpis")
 def api_kpis():
+    """
+    回傳當月 KPI，包括：
+    - income / expense / cash_flow
+    - savings_rate 儲蓄率
+    - monthly_roi 投資報酬率（用「投資」類別交易算）
+    - assets_total 資產總額（用交易累積現金算）
+    """
     monthly = aggregate_monthly_cash()
-    trend, roi_map = total_assets_trend()
-    last_m = trend[-1]["month"] if trend else None
-    m = request.args.get("month") or (last_m if last_m else current_month())
+    m_param = request.args.get("month")
+    m = m_param or (monthly[-1]["month"] if monthly else current_month())
 
     inc = exp = bal = 0.0
     for x in monthly:
@@ -297,8 +253,9 @@ def api_kpis():
             break
 
     savings_rate = round((bal / inc), 4) if inc > 0 else None
-    monthly_roi = roi_map.get(m)
-    assets_total = next((t["total"] for t in trend if t["month"] == m), None)
+
+    _, monthly_roi = calculate_investment_roi(m)
+    _, assets_total = calculate_total_assets(m)
 
     return jsonify(
         {
@@ -313,28 +270,101 @@ def api_kpis():
     )
 
 
-@app.route("/api/trackers")
+# -----------------------
+# 財務追蹤 Trackers API
+# -----------------------
+@app.route("/api/trackers", methods=["GET", "POST"])
 def api_trackers():
+    """
+    財務追蹤：
+    - GET：依月份列出所有追蹤項目，
+        若有設定 category，就自動用該月該類別的支出當作 spent
+        否則使用資料表原本的 spent（相容舊版）
+    - POST：新增追蹤項目（name, budget, category, month）
+    """
     db = get_db()
-    m = request.args.get("month") or current_month()
-    rows = db.execute(
-        "SELECT month,name,spent,budget FROM trackers WHERE month=?", (m,)
-    ).fetchall()
-    data = []
-    for r in rows:
-        progress = (
-            round(r["spent"] / r["budget"], 4) if r["budget"] and r["budget"] > 0 else None
-        )
-        data.append(
-            {
-                "month": r["month"],
-                "name": r["name"],
-                "spent": r["spent"],
-                "budget": r["budget"],
-                "progress": progress,
-            }
-        )
-    return jsonify({"month": m, "data": data})
+
+    if request.method == "GET":
+        m = request.args.get("month") or current_month()
+
+        rows = db.execute(
+            """
+            SELECT id, month, name, spent, budget, category
+            FROM trackers
+            WHERE month=?
+            ORDER BY id
+            """,
+            (m,),
+        ).fetchall()
+
+        data = []
+        for r in rows:
+            # 若有綁定支出類別，就用該類別的實際支出算本月花費
+            if r["category"]:
+                spent_row = db.execute(
+                    """
+                    SELECT COALESCE(SUM(amount),0) AS s
+                    FROM transactions
+                    WHERE type='expense'
+                      AND strftime('%Y-%m', date)=?
+                      AND category=?
+                    """,
+                    (m, r["category"]),
+                ).fetchone()
+                spent_dynamic = spent_row["s"] or 0.0
+            else:
+                # 沒有綁定類別就使用資料表原本的 spent 欄位（相容舊資料）
+                spent_dynamic = r["spent"] or 0.0
+
+            budget = r["budget"] or 0.0
+            progress = round(spent_dynamic / budget, 4) if budget > 0 else None
+
+            data.append(
+                {
+                    "id": r["id"],
+                    "month": r["month"],
+                    "name": r["name"],
+                    "category": r["category"],
+                    "spent": round(spent_dynamic, 2),
+                    "budget": budget,
+                    "progress": progress,
+                }
+            )
+
+        return jsonify({"month": m, "data": data})
+
+    # POST：新增財務追蹤項目
+    payload = request.get_json(force=True)
+    name = (payload.get("name") or "").strip()
+    budget_raw = payload.get("budget")
+    category = payload.get("category")  # 可為 None → 不綁定特定類別
+    month = payload.get("month") or current_month()
+
+    if not name:
+        return jsonify({"ok": False, "error": "追蹤項目名稱不可空白"}), 400
+
+    try:
+        budget = float(budget_raw)
+        if budget <= 0:
+            raise ValueError()
+    except Exception:
+        return jsonify({"ok": False, "error": "預算需為正數"}), 400
+
+    db.execute(
+        "INSERT INTO trackers (month, name, spent, budget, category) VALUES (?,?,?,?,?)",
+        (month, name, 0.0, budget, category),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/trackers/<int:tid>", methods=["DELETE"])
+def api_tracker_delete(tid):
+    """刪除單一財務追蹤項目。"""
+    db = get_db()
+    db.execute("DELETE FROM trackers WHERE id=?", (tid,))
+    db.commit()
+    return jsonify({"ok": True})
 
 
 # -----------------------
@@ -535,7 +565,7 @@ def api_goals():
                     "id": r["id"],
                     "name": r["name"],
                     "target": target,
-                    "saved": total_saved,  # 回傳給前端的「目前累積」
+                    "saved": total_saved,
                     "percent": percent,
                 }
             )
@@ -580,3 +610,4 @@ def api_goal_delete(gid):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
