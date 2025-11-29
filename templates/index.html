@@ -97,16 +97,17 @@
   </div>
 </section>
 
-<!-- 理財目標 -->
+<!-- 🎯 理財目標 -->
 <section class="card theme-10">
   <h3>🎯 理財目標</h3>
 
+  <!-- 三個欄位：目標名稱 / 目標金額 / 目前累積 -->
   <form id="goalForm" class="form inline-form">
     <div class="inline-row">
       <input
         type="text"
         name="name"
-        placeholder="例如：日本自由行 ✈️"
+        placeholder="例如：日本畢旅 ✈️"
         required
       />
       <input
@@ -120,8 +121,7 @@
         type="number"
         name="saved"
         step="0.01"
-        placeholder="已存金額（可先填 0）"
-        value="0"
+        placeholder="目前累積（可先填 0）"
       />
       <button type="submit" class="btn primary">
         新增目標
@@ -129,6 +129,7 @@
     </div>
   </form>
 
+  <!-- 顯示：目標名稱 / 目標金額 / 目前累積 / 達成率 + 進度條 -->
   <div id="goalsList" class="goals-list"></div>
 </section>
 
@@ -171,12 +172,15 @@
           <option value="其他">其他</option>
         </select>
       </div>
+
+      <!-- ✅ 加上說明文字 -->
       <div class="row">
-        <label>對應目標（可選）</label>
+        <label>對應目標（可選，會自動累加到理財目標）</label>
         <select name="goal_id" id="goalSelect">
           <option value="">（不指定）</option>
         </select>
       </div>
+
       <div class="row">
         <label>交易明細</label>
         <input
@@ -226,6 +230,18 @@
     const pieEmptyMsg = document.getElementById("pieEmptyMsg");
     const radarEmptyMsg = document.getElementById("radarEmptyMsg");
 
+    // 莫蘭迪藍 / 粉 / 紫色系
+    const morandiColors = [
+      "#A3B5C7",
+      "#D8A7B1",
+      "#E4B7C5",
+      "#C3B5E6",
+      "#C9C2EC",
+      "#B9C6D8",
+      "#E0C4D8",
+      "#D2C7E3"
+    ];
+
     async function fetchJSON(url, opts) {
       const r = await fetch(url, opts);
       return r.json();
@@ -262,17 +278,14 @@
     // ----------------- KPI -----------------
     async function updateKPIs(month) {
       const data = await fetchJSON(`/api/kpis?month=${month}`);
-      // 儲蓄率 = (收入-支出)/收入
       document.getElementById("kpiSavingsRate").textContent =
         data.savings_rate != null
           ? (data.savings_rate * 100).toFixed(1) + "%"
           : "--";
-      // 投資報酬率（只含 investment_positions）
       document.getElementById("kpiROI").textContent =
         data.monthly_roi != null
           ? (data.monthly_roi * 100).toFixed(2) + "%"
           : "—";
-      // 月現金流 = 收入 - 支出
       document.getElementById("kpiCashFlow").textContent =
         data.cash_flow != null
           ? data.cash_flow.toLocaleString()
@@ -283,7 +296,7 @@
           : "--";
     }
 
-    // ----------------- 折線圖：收入 / 支出 / 結餘 -----------------
+    // ----------------- 折線圖 -----------------
     async function updateLine() {
       const rows = await fetchJSON(
         "/api/line_income_expense_balance"
@@ -339,7 +352,14 @@
         type: "pie",
         data: {
           labels,
-          datasets: [{ data: amounts }],
+          datasets: [
+            {
+              data: amounts,
+              backgroundColor: morandiColors,
+              borderColor: "#FFFFFF",
+              borderWidth: 2,
+            },
+          ],
         },
         options: { responsive: true, maintainAspectRatio: false },
       });
@@ -436,7 +456,7 @@
       }
     }
 
-    // 載入目標下拉選單
+    // 載入目標下拉（供交易指定）
     async function loadGoalOptions(selectedId) {
       if (!goalSelect) return;
       const res = await fetchJSON("/api/goals");
@@ -492,7 +512,6 @@
         txnBody.innerHTML = rows;
       }
 
-      // 綁定編輯 / 刪除
       txnBody
         .querySelectorAll("[data-edit]")
         .forEach((btn) => {
@@ -545,7 +564,7 @@
         { method: "DELETE" }
       );
       if (res.ok) {
-        await initMonths(); // 重新算 KPI / 圖表 / 交易
+        await initMonths();
       } else {
         alert("刪除失敗");
       }
@@ -602,7 +621,7 @@
         }
         if (res.ok) {
           closeModal();
-          await initMonths(); // 新增 / 編輯 後：收入 / 支出 / 結餘、KPI、圖表全部重算
+          await initMonths();
         } else {
           alert(res.error || "儲存失敗");
         }
@@ -634,9 +653,9 @@
               <button class="btn tiny danger" data-goal-del="${g.id}">刪除</button>
             </div>
             <div class="goal-meta">
-              已存：${g.saved.toLocaleString()} / 目標：${g.target.toLocaleString()}（${pct.toFixed(
-            1
-          )}%）
+              目標金額：${g.target.toLocaleString()}　|　
+              目前累積：${g.saved.toLocaleString()}　|　
+              達成率：${pct.toFixed(1)}%
             </div>
             <div class="goal-bar">
               <div class="goal-bar-fill" style="width:${pct}%;"></div>
@@ -679,7 +698,7 @@
         const payload = {
           name: fd.get("name"),
           target: fd.get("target"),
-          saved: fd.get("saved") || 0,
+          saved: fd.get("saved"), // 留空就丟空字串，後端會當 0
         };
         const res = await fetchJSON("/api/goals", {
           method: "POST",
@@ -687,8 +706,7 @@
           body: JSON.stringify(payload),
         });
         if (res.ok) {
-          goalForm.reset();
-          goalForm.elements.saved.value = 0;
+          goalForm.reset();   // 不再幫你填 0
           updateGoals();
         } else {
           alert(res.error || "新增目標失敗");
@@ -703,4 +721,3 @@
   });
 </script>
 {% endblock %}
-

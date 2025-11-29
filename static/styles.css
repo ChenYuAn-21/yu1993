@@ -1,4 +1,3 @@
-/* 可愛、淺色系 + emoji 友善 + 系統化粉彩主題 */
 :root {
   --bg: #fbfcff;
   --text: #374151;
@@ -6,31 +5,29 @@
   --border: #e5e7eb;
   --shadow: 0 12px 28px rgba(0, 0, 0, 0.06);
 
-  /* KPI 小膠囊 */
   --accent: #7c3aed;
   --accent-soft: #efe7ff;
 
-  /* 系統化粉彩（同明度/低飽和） */
   --p1: #f4f0ff;
-  --p1-br: #e7deff; /* 薰衣草 */
+  --p1-br: #e7deff;
   --p2: #eaf6ff;
-  --p2-br: #d9eeff; /* 冰藍   */
+  --p2-br: #d9eeff;
   --p3: #eafdf6;
-  --p3-br: #d6faec; /* 薄荷   */
+  --p3-br: #d6faec;
   --p4: #fff6e8;
-  --p4-br: #ffe7c6; /* 杏桃   */
+  --p4-br: #ffe7c6;
   --p5: #fff0f7;
-  --p5-br: #ffd9e9; /* 粉櫻   */
+  --p5-br: #ffd9e9;
   --p6: #f7ffe8;
-  --p6-br: #e7fec1; /* 青檸   */
+  --p6-br: #e7fec1;
   --p7: #f0fbff;
-  --p7-br: #d6f5ff; /* 水霧藍 */
+  --p7-br: #d6f5ff;
   --p8: #fffbef;
-  --p8-br: #ffefc4; /* 奶油   */
+  --p8-br: #ffefc4;
   --p9: #f0fffd;
-  --p9-br: #ccfff6; /* 藍綠薄霧 */
+  --p9-br: #ccfff6;
   --p10: #fff0ff;
-  --p10-br: #f7d6ff; /* 淡蘭花 */
+  --p10-br: #f7d6ff;
 }
 
 * {
@@ -102,7 +99,7 @@ body {
   grid-template-columns: 1.2fr 0.8fr 1fr;
 }
 
-/* 卡片基礎樣式 */
+/* 卡片 */
 .card {
   border-radius: 18px;
   padding: 16px;
@@ -120,7 +117,7 @@ body {
   gap: 6px;
 }
 
-/* 不同區塊不同柔和色 */
+/* 主題色 */
 .card.theme-1 {
   background: var(--p1);
   border-color: var(--p1-br);
@@ -451,3 +448,4 @@ canvas {
     grid-template-columns: 1fr;
   }
 }
+

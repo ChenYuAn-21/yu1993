@@ -27,13 +27,21 @@ def close_db(_exc):
         db.close()
 
 
+def ensure_column(db, table, column, col_def):
+    """如果指定欄位不存在，就自動 ALTER TABLE 加上去。"""
+    info = db.execute(f"PRAGMA table_info({table})").fetchall()
+    cols = [r["name"] for r in info]
+    if column not in cols:
+        db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def}")
+
+
 def init_db():
     db = get_db()
     db.executescript(
         """
     CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date TEXT NOT NULL,                 -- YYYY-MM-DD
+        date TEXT NOT NULL,
         type TEXT NOT NULL CHECK(type IN ('income','expense')),
         amount REAL NOT NULL,
         category TEXT NOT NULL,
@@ -56,6 +64,7 @@ def init_db():
         budget REAL NOT NULL DEFAULT 0
     );
 
+    -- 🎯 理財目標：name / target / saved(手動初始累積)
     CREATE TABLE IF NOT EXISTS goals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -64,14 +73,14 @@ def init_db():
     );
     """
     )
-    # 確保 transactions 有 goal_id 欄位（舊 DB 也能安全遷移）
-    info = db.execute("PRAGMA table_info(transactions)").fetchall()
-    cols = [r["name"] for r in info]
-    if "goal_id" not in cols:
-        db.execute("ALTER TABLE transactions ADD COLUMN goal_id INTEGER")
+
+    # 舊資料表補欄位
+    ensure_column(db, "transactions", "goal_id", "INTEGER")
+    ensure_column(db, "goals", "saved", "REAL NOT NULL DEFAULT 0")
+
     db.commit()
 
-    # 只有第一次時塞入示例資料
+    # 若完全沒有交易，塞一些示範資料
     cur = db.execute("SELECT COUNT(1) AS c FROM transactions")
     if cur.fetchone()["c"] == 0:
         db.executemany(
@@ -129,7 +138,6 @@ with app.app_context():
 # 聚合計算
 # -----------------------
 def aggregate_monthly_cash():
-    """月度：收入、支出、結餘（收入-支出）"""
     db = get_db()
     rows = db.execute(
         """
@@ -157,7 +165,6 @@ def aggregate_monthly_cash():
 
 
 def aggregate_expense_by_category(target_month=None):
-    """支出分類：依類別加總（支出）"""
     db = get_db()
     params = []
     sql = """
@@ -176,7 +183,6 @@ def aggregate_expense_by_category(target_month=None):
 
 
 def portfolio_by_month():
-    """投資部位：只看 investment_positions（不含消費）"""
     db = get_db()
     rows = db.execute(
         """
@@ -210,7 +216,6 @@ def portfolio_by_month():
 
 
 def total_assets_trend():
-    """累積現金 + 投資市值 → 資產總額趨勢"""
     monthly_cash = {x["month"]: x for x in aggregate_monthly_cash()}
     by_m, months, roi = portfolio_by_month()
     cash_acc = 0.0
@@ -245,7 +250,7 @@ def current_month():
 
 
 # -----------------------
-# 頁面 & API
+# 頁面 & 基本 API
 # -----------------------
 @app.route("/")
 def index():
@@ -280,13 +285,6 @@ def api_pie():
 
 @app.route("/api/kpis")
 def api_kpis():
-    """
-    1. 當月收入 = 所有 type='income' 金額加總
-    2. 當月支出 = 所有 type='expense' 金額加總
-    3. 月現金流 = 收入 − 支出
-    4. 儲蓄率   = (收入 − 支出) / 收入
-    5. 投資報酬率 = 只用 investment_positions 計算
-    """
     monthly = aggregate_monthly_cash()
     trend, roi_map = total_assets_trend()
     last_m = trend[-1]["month"] if trend else None
@@ -340,7 +338,7 @@ def api_trackers():
 
 
 # -----------------------
-# 交易 CRUD（含目標連動）
+# 交易 CRUD（含 goal_id）
 # -----------------------
 @app.route("/api/transactions", methods=["GET", "POST"])
 def api_transactions():
@@ -408,14 +406,6 @@ def api_transactions():
         "INSERT INTO transactions (date,type,amount,category,note,goal_id) VALUES (?,?,?,?,?,?)",
         (date, ttype, amount, category, note, goal_id_val),
     )
-
-    # 如果這筆「收入」有指定目標 → 自動累加目標 saved
-    if ttype == "income" and goal_id_val is not None:
-        db.execute(
-            "UPDATE goals SET saved = saved + ? WHERE id=?",
-            (amount, goal_id_val),
-        )
-
     db.commit()
     return jsonify({"ok": True, "id": cur.lastrowid})
 
@@ -424,27 +414,12 @@ def api_transactions():
 def api_transaction_detail(tid):
     db = get_db()
 
-    # DELETE：刪除交易，同時回沖目標金額
     if request.method == "DELETE":
-        row = db.execute(
-            "SELECT type, amount, goal_id FROM transactions WHERE id=?", (tid,)
-        ).fetchone()
-        if row:
-            if row["goal_id"] is not None and row["type"] == "income":
-                amt = row["amount"] or 0.0
-                db.execute(
-                    """
-                    UPDATE goals
-                    SET saved = CASE WHEN saved - ? >= 0 THEN saved - ? ELSE 0 END
-                    WHERE id=?
-                    """,
-                    (amt, amt, row["goal_id"]),
-                )
         db.execute("DELETE FROM transactions WHERE id=?", (tid,))
         db.commit()
         return jsonify({"ok": True})
 
-    # PUT：更新交易（包含可能更換目標或金額）
+    # PUT：更新交易
     payload = request.get_json(force=True)
     old = db.execute(
         "SELECT type, amount, goal_id FROM transactions WHERE id=?", (tid,)
@@ -519,32 +494,6 @@ def api_transaction_detail(tid):
 
     params.append(tid)
     db.execute(f"UPDATE transactions SET {', '.join(fields)} WHERE id=?", params)
-
-    # 更新後重新查詢，調整目標 saved
-    new = db.execute(
-        "SELECT type, amount, goal_id FROM transactions WHERE id=?", (tid,)
-    ).fetchone()
-
-    # 把舊紀錄對目標的貢獻先扣掉
-    if old["goal_id"] is not None and old["type"] == "income":
-        amt = old["amount"] or 0.0
-        db.execute(
-            """
-            UPDATE goals
-            SET saved = CASE WHEN saved - ? >= 0 THEN saved - ? ELSE 0 END
-            WHERE id=?
-            """,
-            (amt, amt, old["goal_id"]),
-        )
-
-    # 再把新紀錄的貢獻加回去
-    if new["goal_id"] is not None and new["type"] == "income":
-        amt2 = new["amount"] or 0.0
-        db.execute(
-            "UPDATE goals SET saved = saved + ? WHERE id=?",
-            (amt2, new["goal_id"]),
-        )
-
     db.commit()
     return jsonify({"ok": True})
 
@@ -555,37 +504,59 @@ def api_transaction_detail(tid):
 @app.route("/api/goals", methods=["GET", "POST"])
 def api_goals():
     db = get_db()
+
+    # 讀取：用交易動態累計 saved_from_tx
     if request.method == "GET":
         rows = db.execute(
-            "SELECT id, name, target, saved FROM goals ORDER BY id"
+            """
+            SELECT
+                g.id,
+                g.name,
+                g.target,
+                g.saved AS saved_base,
+                COALESCE(SUM(CASE WHEN t.type='income' THEN t.amount ELSE 0 END),0) AS saved_from_tx
+            FROM goals g
+            LEFT JOIN transactions t
+                ON t.goal_id = g.id
+            GROUP BY g.id, g.name, g.target, g.saved
+            ORDER BY g.id
+            """
         ).fetchall()
+
         data = []
         for r in rows:
             target = r["target"] or 0.0
-            saved = r["saved"] or 0.0
-            percent = round(saved / target * 100, 1) if target > 0 else 0.0
+            base = r["saved_base"] or 0.0
+            from_tx = r["saved_from_tx"] or 0.0
+            total_saved = base + from_tx
+            percent = round(total_saved / target * 100, 1) if target > 0 else 0.0
             data.append(
                 {
                     "id": r["id"],
                     "name": r["name"],
                     "target": target,
-                    "saved": saved,
+                    "saved": total_saved,  # 回傳給前端的「目前累積」
                     "percent": percent,
                 }
             )
         return jsonify({"data": data})
 
-    # 新增目標（含目前已存金額）
+    # POST：新增理財目標（saved 為使用者輸入的起始累積，可空白）
     payload = request.get_json(force=True)
     name = (payload.get("name") or "").strip()
-    target = payload.get("target")
-    saved = payload.get("saved", 0)
+    target_raw = payload.get("target")
+    saved_raw = payload.get("saved")
 
     if not name:
         return jsonify({"ok": False, "error": "目標名稱不可空白"}), 400
+
+    # 空白 / None 視為 0
+    if saved_raw is None or str(saved_raw).strip() == "":
+        saved_raw = 0
+
     try:
-        target = float(target)
-        saved = float(saved)
+        target = float(target_raw)
+        saved = float(saved_raw)
         if target <= 0 or saved < 0:
             raise ValueError()
     except Exception:
